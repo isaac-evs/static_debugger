@@ -3,13 +3,15 @@ This module is the model of the system.
 This is the model representation of the MVC software pattern.
 """
 import sys
-from typing import List, Type, Optional, Tuple, Union
+from typing import List, NamedTuple, Optional, Type, Tuple, Union
 from types import TracebackType
 from model.core.ModelTester import TestCase, Observation, InfluencePath, Behavior
 from model.HyphotesisTester import HyphotesisTester
 from model.FaultLocalizator import FaultLocalizator
 from model.HypothesisGenerator import Hypothesis, HypothesisGenerator
 from model.HypothesisRefinement import AbductionSchema
+from model.SearchSchema import SearchSchema, DFSSchema, BFSSchema, AStarSchema, Candidate
+from model.EvaluationEngine import EvaluationEngine
 import pandas as pd
 import logger as AbinLogging
 import config as DebugController
@@ -19,6 +21,32 @@ Localizator = FaultLocalizator
 Tester = HyphotesisTester
 Generator = HypothesisGenerator
 Refinement = 'HypothesisRefinement'
+
+# Maps each abduction schema to the (stateless) traversal strategy that
+# decides when the search recurses into an improvement candidate.
+SEARCH_SCHEMAS = {
+    AbductionSchema.DFS: DFSSchema,
+    AbductionSchema.BFS: BFSSchema,
+    AbductionSchema.A_star: AStarSchema,
+}
+
+
+class SearchResult(NamedTuple):
+    """ The pure result of a (possibly recursive) search traversal.
+
+    Unlike the previous recursive implementation, this result carries the
+    winning hypothesis/candidate explicitly instead of relying on the
+    caller's local loop variables, so a successful repair found deep in
+    the recursion can never be overwritten by a parent frame's own
+    (unrelated) hypothesis while it backtracks. """
+    model_src_code: Union[List[str], str]
+    behavior: Behavior
+    prev_observation: Observation
+    new_observation: Observation
+    hypothesis: Optional[Hypothesis]
+    candidate: Optional[int]
+    depth: int
+
 
 class AbinModel():
     """ This class is the encapsulation of the model"""
@@ -46,20 +74,49 @@ class AbinModel():
         self.abduction_depth = 0
         self.abduction_breadth = 0
         self.abduction_schema = abduction_schema
+        self.search_schema: Type[SearchSchema] = SEARCH_SCHEMAS[abduction_schema]
         self.candidate = None
         self.bugfixing_hyphotesis = None
         self.fault_localizator = localizator
         self.hyphotesis_tester = tester
         self.hypotheses_generator = generator
+        self.evaluation_engine = EvaluationEngine(function_name, test_suite, tester)
 
     def start_auto_debugging(self, model_src_code = None,
         improvement_candidates_set = None) -> Tuple[str, Behavior, Observation, Observation]:
         """ This method encapsulates the whole debugging process.
+
+        This is the public entry point: it delegates the actual search to
+        `_search`, which is a pure recursive traversal that never mutates
+        `self`. The winning hypothesis/candidate (if any) are only ever
+        assigned here, once, from the final propagated result -- so a
+        successful repair found deep in the recursion can't be clobbered
+        by a parent frame's own hypothesis while DFS backtracks.
+
         :rtype: Tuple[str, Behavior, Observation, Observation]
+        """
+        result = self._search(model_src_code, improvement_candidates_set, depth=0)
+        self.abduction_depth = result.depth
+        self.candidate = result.candidate
+        self.bugfixing_hyphotesis = result.hypothesis[0] if result.behavior == Behavior.Correct else None
+        return (result.model_src_code, result.behavior, result.prev_observation, result.new_observation)
+
+    def _search(self, model_src_code, improvement_candidates_set, depth: int) -> SearchResult:
+        """ Recursively traverses the hypotheses search space.
+
+        Search traversal (deciding *when* to recurse, via `self.search_schema`),
+        database retrieval/hypothesis generation (`self.hypotheses_generation`),
+        and runtime evaluation (`self.evaluation_engine`) are three separate,
+        independently swappable collaborators; this method only orchestrates
+        them and carries state through return values instead of instance
+        attributes, so recursive calls can never corrupt a sibling/parent
+        frame's state.
+
+        :rtype: SearchResult
         """
         AbinLogging.debugging_logger.info(f"""
         Schema: {self.abduction_schema}
-        Abduction Depth: {self.abduction_depth}
+        Abduction Depth: {depth}
         Abduction Breadth: {self.abduction_breadth}""")
         localizator = self.fault_localization(model_src_code, improvement_candidates_set)
         behavior = Behavior.Undefined
@@ -79,10 +136,13 @@ class AbinModel():
         )
         if behavior == Behavior.Valid:
             AbinLogging.debugging_logger.info(f"AbinDebugger did not detect any defects in the program.")
-            return (model_src_code, behavior, prev_observation, [])
+            return SearchResult(model_src_code, behavior, prev_observation, [], None, None, depth)
         # We need to save the prev_observation in case of failed refinement
         prev_observation_holder = prev_observation[:]
         imprv_candidates = []
+        winning_hypothesis = None
+        winning_candidate = None
+        final_depth = depth
         while True:
             new_observation = []
             hypotheses_generator = self.hypotheses_generation(influence_path, model_src_code[:], self.max_complexity)
@@ -95,7 +155,8 @@ class AbinModel():
                         """
                     )
                     self.abduction_breadth += 1
-                    (new_model_src_code, behavior, new_observation, hypothesis) = self.hyphotesis_testing(prev_observation, model_src_code[:], hypothesis)
+                    evaluation = self.evaluation_engine.evaluate(prev_observation, model_src_code[:], Candidate(hypothesis))
+                    (new_model_src_code, behavior, new_observation, hypothesis) = evaluation
                     AbinLogging.debugging_logger.info(f"""
                         New Observations:
                         {new_observation}
@@ -105,32 +166,23 @@ class AbinModel():
                     )
                     if behavior == Behavior.Improvement:
                         imprv_candidates.append(hypothesis)
-                        if self.abduction_schema == AbductionSchema.DFS:
-                            # recursion here
-                            self.abduction_depth += 1
-                            result = self.start_auto_debugging(model_src_code[:], imprv_candidates)
-                            (new_model_src_code, behavior, prev_observation, new_observation) = result
+                        if self.search_schema.recurse_per_improvement():
+                            # DFS: dive into this improvement right away.
+                            sub_result = self._search(model_src_code[:], imprv_candidates, depth + 1)
+                            (new_model_src_code, behavior, prev_observation,
+                                new_observation, winning_hypothesis, winning_candidate, final_depth) = sub_result
                             imprv_candidates.clear()
-                        elif self.abduction_schema == AbductionSchema.BFS:
-                            # save hypothesis here
-                            pass
-                        elif self.abduction_schema == AbductionSchema.A_star:
-                            # insertion sort and save hypothesis here
-                            # already implemented in refinement class
-                            pass
 
                     if behavior == Behavior.Correct:
                         break
 
             if behavior == Behavior.Correct:
                 pass
-            elif (imprv_candidates
-                and (self.abduction_schema == AbductionSchema.BFS
-                or self.abduction_schema == AbductionSchema.A_star) ):
-                # recursion here
-                self.abduction_depth += 1
-                result = self.start_auto_debugging(model_src_code[:], imprv_candidates)
-                (new_model_src_code, behavior, prev_observation, new_observation) = result
+            elif imprv_candidates and not self.search_schema.recurse_per_improvement():
+                # BFS/A*: recurse only once the current depth is exhausted.
+                sub_result = self._search(model_src_code[:], imprv_candidates, depth + 1)
+                (new_model_src_code, behavior, prev_observation,
+                    new_observation, winning_hypothesis, winning_candidate, final_depth) = sub_result
                 imprv_candidates.clear()
 
             if behavior == Behavior.Correct:
@@ -139,18 +191,23 @@ class AbinModel():
                     {prev_observation}
                     New Observations:
                     {new_observation}
-                    Abduction Depth: {self.abduction_depth}
+                    Abduction Depth: {final_depth}
                     Abduction Breadth: {self.abduction_breadth}
                     \nSUCCESSFUL REPAIR!
                     """
                 )
-                self.candidate = hypotheses_generator.candidate
-                self.bugfixing_hyphotesis = hypothesis[0]
-                return (new_model_src_code, behavior, prev_observation, new_observation)
+                # A repair found via a recursive call already carries its own
+                # winning hypothesis/candidate; only fall back to this
+                # frame's own loop variables when the fix was found here.
+                if winning_hypothesis is None:
+                    winning_hypothesis = hypothesis
+                    winning_candidate = hypotheses_generator.candidate
+                return SearchResult(new_model_src_code, behavior, prev_observation,
+                    new_observation, winning_hypothesis, winning_candidate, final_depth)
 
             elif localizator.is_refinement:
                 AbinLogging.debugging_logger.info(f"\nImprovement Candidate Rejected...")
-                self.abduction_depth -= 1
+                depth -= 1
                 has_imprv_cand = next(localizator)
                 if not has_imprv_cand:
                     # We need to return the prev_observation that was saved
@@ -159,9 +216,9 @@ class AbinModel():
                     AbinLogging.debugging_logger.info(f"Failed Refinement...")
                     AbinLogging.debugging_logger.info(f"""
                     Schema: {self.abduction_schema}
-                    Abduction Depth: {self.abduction_depth}
+                    Abduction Depth: {depth}
                     Abduction Breadth: {self.abduction_breadth}""")
-                    return ('', behavior, prev_observation, new_observation)
+                    return SearchResult('', behavior, prev_observation, new_observation, None, None, depth)
                 behavior = Behavior.Undefined
                 with localizator:
                     (prev_observation, influence_path) = localizator.model_testing(check_consistency=False)
@@ -170,9 +227,9 @@ class AbinModel():
                 break
 
 
-        if self.abduction_depth == 0:
+        if depth == 0:
             AbinLogging.debugging_logger.debug(f"\nUNABLE TO REPAIR!")
-        return ('', behavior, prev_observation, new_observation)
+        return SearchResult('', behavior, prev_observation, new_observation, None, None, depth)
 
     def fault_localization(self, model_src_code = None,
         improvement_candidates_set = None) -> Localizator:
@@ -214,23 +271,16 @@ class AbinModel():
         hypothesis: Hypothesis) -> Tuple[Behavior, Observation]:
         """ This method encapsulates the hypothesis testing process.
 
+        Kept for backward compatibility; delegates to `self.evaluation_engine`,
+        the single source of truth for runtime evaluation (see `_search`).
+
         :param prev_observation: The previous observation.
         :type  prev_observation: Observation
         :param model_name: The model's name.
         :type  model_name: str
         :rtype : Tuple[Behavior, Observation]
         """
-        behavior = Behavior.Undefined
-        observation = []
-        influence_path = []
-        new_model_src_code = []
-        with self.hyphotesis_tester(prev_observation, src_code,
-            self.function_name, self.test_suite, hypothesis) as hypo_test:
-            (observation, influence_path) = hypo_test.model_testing(check_consistency=True)
-            behavior = hypo_test.compare_observations()
-            new_model_src_code = hypo_test.model_src
-            hypothesis = hypo_test.hypothesis
-        return (new_model_src_code, behavior, observation, hypothesis)
+        return self.evaluation_engine.evaluate(prev_observation, src_code, Candidate(hypothesis))
 
     def hyphotesis_refinement(self):
         pass
