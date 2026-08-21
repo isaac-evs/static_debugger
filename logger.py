@@ -1,12 +1,20 @@
 import logging
+import os
 from textwrap import dedent
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class ConsoleLogHandler(logging.Handler):
     def emit(self, logRecord: logging.LogRecord):
         message = dedent(str(logRecord.getMessage()))
         print(message)
 
-LOGGER_LEVEL = logging.INFO
+DISABLE_LOGGING = os.getenv("DISABLE_LOGGING", "false").lower() == "true"
+LOGGER_LEVEL = logging.CRITICAL + 1 if DISABLE_LOGGING else getattr(
+    logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO
+)
 
 CONSOLE_HANDLER = ConsoleLogHandler()
 debugging_logger = logging.getLogger('DebuggingLogger')

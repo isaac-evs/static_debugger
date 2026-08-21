@@ -66,11 +66,10 @@ def main():
 
    args = parser.parse_args()
 
-   # Set up basic console logging
+   # Set up basic console logging (level controlled via .env / logger.py)
    import logging
 
-   logging.basicConfig(level=logging.DEBUG, format="%(message)s")
-   AbinLogging.debugging_logger.setLevel(logging.DEBUG)
+   logging.basicConfig(level=AbinLogging.LOGGER_LEVEL, format="%(message)s")
 
    # Handle mining mode
    if args.mine:
