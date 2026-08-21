@@ -11,6 +11,7 @@ from typing import Union, Type, Tuple, List
 from model.abstractor.Bugfix import BugfixMetadata
 from model.abstractor.NodeAbstractor import IDMapping, NodeAbstractor, NodeMapping
 from model.abstractor.NodeMapper import ASTIdentifiers, ASTNode, IDTokens
+from model.abstractor.SafeASTLiteral import safe_ast_literal_eval
 
 
 class HypothesisAbductor(ast.NodeVisitor):
@@ -45,7 +46,7 @@ class HypothesisAbductor(ast.NodeVisitor):
   def abduct_fix(self) -> None:
     """ This method controls the abduction process. """
     (new_mapping_id, new_mapping_nodes) = self.next_abductive_mapping()
-    self.abducted_fix = eval(self.bugfix['fix_metadata']['abstract_node'], vars(ast), {})
+    self.abducted_fix = safe_ast_literal_eval(self.bugfix['fix_metadata']['abstract_node'])
     self.abducted_fix.map_ids = new_mapping_id.copy()
     self.abducted_fix.map_nodes = new_mapping_nodes.copy()
     self.visit(self.abducted_fix)

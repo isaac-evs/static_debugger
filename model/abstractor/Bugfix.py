@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 from model.abstractor.NodeMapper import NodeMapper, ASTNode, IDTokens
 from model.abstractor.PythonLLOC import PythonLLOC, LogicalLOC
 from model.abstractor.NodeAbstractor import NodeAbstractor, NodeMetadata
+from model.abstractor.SafeASTLiteral import safe_ast_literal_eval
 
 class BugfixMetadata(TypedDict):
     """ This class defines the JSON structure of
@@ -95,7 +96,7 @@ class Bugfix():
     : rtype: ASTNode
     """
     data = self.bug.ast_node_data
-    node = eval(data['abstract_node'], vars(ast), {})
+    node = safe_ast_literal_eval(data['abstract_node'])
     return node
 
   def get_fix_node(self) -> ASTNode:
@@ -104,7 +105,7 @@ class Bugfix():
     : rtype: ASTNode
     """
     data = self.fix.ast_node_data
-    node = eval(data['abstract_node'], vars(ast), {})
+    node = safe_ast_literal_eval(data['abstract_node'])
     return node
   
   def get_available_identifiers(self) -> IDTokens:
