@@ -1,6 +1,5 @@
 """
-This module contains the ModelLoader and ModelTester classes.
-The ModelLoader class in charge of converting the models into ModuleType objects.
+This module contains the ModelTester class.
 The ModelTester class in charge of automatically test a model.
 """
 from model.core.AbinDebugger import Debugger, AbinDebugger, InfluencePath
@@ -35,55 +34,11 @@ TestCase = Tuple[Test, ExpectedOutput, InputArgs]
 TestSuite = List[TestCase]
 Observation = List[TestResult]
 
-from importlib.abc import SourceLoader
-from importlib.util import module_from_spec, spec_from_loader
-class ModelLoader(SourceLoader):
-   """ This class instances a ModuleType object given the source code.
-   This class is a helper class to convert the models into ModuleType objects
-   in order to test them.
-   """
-   def __init__(self, src_code: Union[List[str], str]) -> None:
-       """ Constructor Method """
-       SourceLoader.__init__(self)
-       self.src_code = ''.join(src_code)
+MODEL_IN_TEST_NAME = 'model_in_test'
 
-   def get_data(self, path: str = None) -> bytes:
-       """ Abstract method implementation.
-
-       This method is the implementation of the abstract method get_data
-       needed to instantiate the SourceLoader class. This method will instantiate
-       the ModuleType object given an src code.
-
-       :param src_code: The source code of the ModuleType object.
-       :type  src_code: str
-       :rtype: bytes
-       """
-       return bytes(self.src_code, 'utf-8')
-
-   def get_filename(self, fullname: str) -> str:
-       """ Abstract method implementation.
-
-       This method is the implementation of the abstract method get_filename
-       needed to instantiate the SourceLoader class. This method will name
-       the ModuleType object given the 'fullname'.
-
-       :param fullname: The name of the ModuleType object.
-       :type  fullname: str
-       :rtype: str
-       """
-       self.fullname = fullname
-       return self.fullname
-
-   def get_source(self) -> str:
-       """ This method will return the source code of the ModuleType object.
-       :rtype: str
-       """
-       return super().get_source(self.fullname)
-
-
-class ModelTester(ModelLoader):
+class ModelTester():
    """ This class is used to automatically test a model  """
-   src_code: Union[List[str], str]
+   src_code: str
    target_function: str
    test_suite: TestSuite
    model: Union[ModuleType, None]
@@ -100,7 +55,7 @@ class ModelTester(ModelLoader):
                debugger: Debugger = AbinDebugger) -> None:
        """ Constructor Method """
        AbinLogging.debugging_logger.debug('Init ModelTester')
-       super().__init__(src_code)
+       self.src_code = '\n'.join(src_code) if isinstance(src_code, list) else src_code
        self.target_function = target_function
        self.test_suite = test_suite
        self.func = None
@@ -113,12 +68,18 @@ class ModelTester(ModelLoader):
 
    def __enter__(self) -> Any:
        """ A context manager method is used to initialize
-       the defective model/program. """
+       the defective model/program.
+
+       The candidate source is compiled and executed purely in-memory:
+       no temporary file is written to disk and no entry is added to
+       `sys.modules`, so concurrent/parallel test runs never collide
+       and there is no risk of stale bytecode being reused. """
        AbinLogging.debugging_logger.debug('Entering ModelTester')
-       spec = spec_from_loader(name='model_in_test', loader=self) # The class itself contains the loader
-       self.model = module_from_spec(spec)
+       self.model = ModuleType(MODEL_IN_TEST_NAME)
+       safe_globals = self.model.__dict__
        try:
-           spec.loader.exec_module(self.model)
+           code = compile(self.src_code, f'<{MODEL_IN_TEST_NAME}>', 'exec')
+           exec(code, safe_globals, safe_globals)
        except Exception:
            AbinLogging.debugging_logger.exception(
                f'An error ocurred while importing the model {self.model.__name__}'
@@ -270,4 +231,4 @@ class ModelTester(ModelLoader):
        a statement of the model in cuestion.
        :rtype: List[str]
        """
-       return self.get_source().splitlines()
+       return self.src_code.splitlines()

@@ -4,7 +4,6 @@ This class is in charge of generating new hypotheses to repair a defect.
 Also,it is one of the core modules used in the methodology.
 """
 from copy import deepcopy
-from pathlib import Path
 from typing import List, Iterator, Tuple, Union, Type, Optional
 from types import TracebackType
 from model.abstractor.NodeAbstractor import NodeAbstractor, NodeAbstraction
@@ -21,7 +20,6 @@ Hypotheses = List[Hypothesis]
 class HypothesisGenerator():
     """ The class is utilized to generate the hypotheses set,
     which the hypotheses that may repair the bug. """
-    abduction_depth: int
     abduction_breadth: int
     complexity: int
     candidate: int
@@ -40,7 +38,6 @@ class HypothesisGenerator():
         model_src: Union[List[str], str], max_complexity: int = 3) -> None:
         """ Constructor Method """
         AbinLogging.debugging_logger.debug('Init HypothesisGenerator')
-        self.abduction_depth = 0
         self.abduction_breadth = 0
         self.max_complexity = max_complexity
         self.candidate = 0
@@ -139,32 +136,6 @@ class HypothesisGenerator():
         """
         hypotheses = HypothesisAbductor(bugged_node, pattern, available_identifiers)
         return iter(hypotheses)
-
-    def build_hypothesis_model(self, hypothesis: Hypothesis) -> Union[str, None]:
-        """ This method creates a new model to test the given hypothesis.
-        
-        :param hypothesis: The hypothesis that need a model.
-        :type  hypothesis: Hypothesis
-        :rtype: Union[str, None]
-        """
-        new_model_src = self.get_current_model()
-        if self.nested_node == 'elif' and re.search('if.*', hypothesis):
-            hypothesis = 'el' + hypothesis
-        indent = re.split('\w', new_model_src[self.candidate - 1])
-        hypothesis = indent[0] + hypothesis + '\n'
-        new_model_src[self.candidate - 1] = hypothesis
-        
-        curr_dir = Path(__file__).parent.parent.resolve()
-        new_model_filename = f"model{str(self.abduction_depth+1)}.py"
-        new_model_path = curr_dir.joinpath('temp', new_model_filename)
-        
-        try:
-            with open(new_model_path, 'w') as m:
-                m.writelines(new_model_src)
-        except Exception as e:
-            AbinLogging.debugging_logger.exception(f"Unable to parse the new model {new_model_filename}.")
-            return None
-        return hypothesis
 
     def __iter__(self) -> None:
         """ Class Iterator Constructor """
@@ -269,30 +240,3 @@ class HypothesisGenerator():
             AbinLogging.debugging_logger.debug(f"{format_exc()}")
         return True  # Ignore exception, if any
 
-    def get_current_model(self) -> List[str]:
-        """ This method returns the model source code.
-        :rtype: List[str]
-        """
-        curr_dir = Path(__file__).parent.parent.resolve()
-        curr_model_path = curr_dir.joinpath('temp', self.model_name)
-        try:
-            with open(curr_model_path, 'r') as f:
-                model_src = f.readlines()
-        except Exception as e:
-            AbinLogging.debugging_logger.exception(
-                f"Unable to open the file: {self.model_name}."
-            )
-            return False
-        return model_src
-
-    @property
-    def model_name(self) -> str:
-        """ This property represents the current model name. """
-        return f"model{str(self.abduction_depth)}.py"
-
-    @property
-    def model_path(self) -> str:
-        """ This property represents the current model path"""
-        curr_dir = Path(__file__).parent.parent.resolve()
-        curr_model_path = curr_dir.joinpath('temp', self.model_name)
-        return curr_model_path

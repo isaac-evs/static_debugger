@@ -11,8 +11,60 @@ from model.core.ModelTester import ModelTester, TestSuite, Observation, PassedTe
 from model.HypothesisGenerator import Hypothesis
 from typing import Union, List
 import logger as AbinLogging
+import ast
 import re
 
+
+# Compound statements only have their header (the part carrying the
+# hypothesis' condition/target) replaced, so the original body/orelse
+# nodes are preserved instead of being discarded.
+_COMPOUND_HEADER_FIELDS = {
+    ast.If: ('test',),
+    ast.While: ('test',),
+    ast.For: ('target', 'iter'),
+    ast.AsyncFor: ('target', 'iter'),
+}
+
+
+class HypothesisNodeTransformer(ast.NodeTransformer):
+   """ Splices a hypothesis snippet into a candidate AST in-memory.
+
+   This replaces the previous approach of guessing indentation with a
+   regex (`re.split('\\w', ...)`) and physically rewriting a line of
+   source: the target statement is located by its original line number
+   and swapped for the parsed hypothesis, using the AST's own notion of
+   structure (rather than text/whitespace) to stay correct. """
+
+   def __init__(self, target_lineno: int, replacement_src: str) -> None:
+       super().__init__()
+       self.target_lineno = target_lineno
+       self.replacement_src = replacement_src
+       self.applied = False
+
+   def generic_visit(self, node: ast.AST) -> ast.AST:
+       node = super().generic_visit(node)
+       if (not self.applied and isinstance(node, ast.stmt)
+               and getattr(node, 'lineno', None) == self.target_lineno):
+           self.applied = True
+           return self._splice(node)
+       return node
+
+   def _splice(self, original_node: ast.stmt) -> ast.stmt:
+       header_fields = _COMPOUND_HEADER_FIELDS.get(type(original_node))
+       if header_fields is None:
+           replacement = ast.parse(self.replacement_src, mode='exec').body[0]
+       else:
+           # Header-only text (e.g. "if x > 0:"/"elif x > 0:") cannot be
+           # parsed on its own; pad it with a dummy body just to make it
+           # parseable, then only reuse the header field(s) so the
+           # original body/orelse survive untouched.
+           header_src = re.sub(r'^elif\b', 'if', self.replacement_src.strip())
+           parsed = ast.parse(f"{header_src}\n    pass", mode='exec').body[0]
+           replacement = original_node
+           for field in header_fields:
+               setattr(replacement, field, getattr(parsed, field))
+       ast.copy_location(replacement, original_node)
+       return replacement
 
 
 class ModelConstructor():
@@ -22,20 +74,29 @@ class ModelConstructor():
        src_code: Union[List[str], str]) -> Union[str, None]:
        """ This method create a new model to test the given hypothesis.
 
+       The mutation happens purely in-memory: the source is parsed into
+       an AST, the candidate statement is swapped via NodeTransformer,
+       and the resulting tree is unparsed back into source text. No
+       temporary file is ever written to disk.
+
        :param hypothesis: The hypothesis that need a model.
        :type  hypothesis: Hypothesis
        :rtype: Union[str, None]
        """
        (hypothesis_str, position, *_) = hypothesis
-       if isinstance(src_code, str):
-           src_code = src_code.splitlines()
-       new_model_src = src_code
+       if isinstance(src_code, list):
+           src_code = '\n'.join(src_code)
 
-       indent = re.split('\w', new_model_src[position - 1])
-       hypothesis_str = indent[0] + hypothesis_str
-       new_model_src[position - 1] = hypothesis_str
-
-       return '\n'.join(new_model_src)
+       tree = ast.parse(src_code)
+       transformer = HypothesisNodeTransformer(position, hypothesis_str)
+       new_tree = transformer.visit(tree)
+       if not transformer.applied:
+           AbinLogging.debugging_logger.exception(
+               f"Unable to locate the target statement at line {position} to apply the hypothesis."
+           )
+           return None
+       ast.fix_missing_locations(new_tree)
+       return ast.unparse(new_tree)
 class HyphotesisTester(ModelTester, ModelConstructor):
    """ This class' goal is to test a hypothesis.
    It inherits from ModelTester and ModelConstructor. """
