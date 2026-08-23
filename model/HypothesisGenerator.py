@@ -10,6 +10,7 @@ from model.abstractor.NodeAbstractor import NodeAbstractor, NodeAbstraction
 from model.abstractor.PythonLLOC import PythonLLOC
 from model.abstractor.HypothesisAbductor import HypothesisAbductor
 from model.abstractor.NodeMapper import ASTNode, IDTokens
+from model.abstractor.SymbolTable import SymbolTable
 import logger as AbinLogging
 import config as DebugController
 import re
@@ -117,24 +118,28 @@ class HypothesisGenerator():
             self.matching_patterns = iter([])
             return (iter([]), 0)
     
-    def apply_bugfix_pattern(self, 
-        bugged_node: NodeAbstractor, 
-        pattern: MatchingPattern, 
-        available_identifiers: IDTokens) -> Iterator[Hypotheses]:
+    def apply_bugfix_pattern(self,
+        bugged_node: NodeAbstractor,
+        pattern: MatchingPattern,
+        available_identifiers: IDTokens,
+        symbol_table: Optional[SymbolTable] = None) -> Iterator[Hypotheses]:
         """ This method applies the fix-pattern to the abstracted node.
 
         This method returns an iterator of hypotheses generated
         due to the application of the fix-pattern.
-        
+
         :param bugged_node: The abstracted node object.
         :type  bugged_node: NodeAbstractor
         :param pattern: The fix pattern.
         :type  pattern: MatchingPattern
         :param available_identifiers: the hexdigest of the abstracted node.
         :type  available_identifiers: IDTokens
+        :param symbol_table: Usage evidence for the local vocabulary, used
+            to filter out-of-role candidate identifiers up front.
+        :type  symbol_table: Optional[SymbolTable]
         :rtype: Iterator[Hypotheses]
         """
-        hypotheses = HypothesisAbductor(bugged_node, pattern, available_identifiers)
+        hypotheses = HypothesisAbductor(bugged_node, pattern, available_identifiers, symbol_table)
         return iter(hypotheses)
 
     def __iter__(self) -> None:
@@ -188,7 +193,9 @@ class HypothesisGenerator():
                 self.nested_node = logical_loc.get_nested_node()
                 ast_bug_candidate = deepcopy(logical_loc.ast_node)
                 available_identifiers = logical_loc.get_available_identifiers()
-                self.hypotheses_set = self.apply_bugfix_pattern(ast_bug_candidate, pattern, available_identifiers)
+                symbol_table = SymbolTable.from_source('\n'.join(model))
+                self.hypotheses_set = self.apply_bugfix_pattern(
+                    ast_bug_candidate, pattern, available_identifiers, symbol_table)
                 self.hypotheses_set_complexity = pattern['complexity']
                 self.hypotheses_set_position = self.candidate
 

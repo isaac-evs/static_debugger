@@ -7,11 +7,56 @@ import astunparse
 import re
 import copy
 import itertools
-from typing import Union, Type, Tuple, List
+from typing import Dict, Optional, Union, Type, Tuple, List
 from model.abstractor.Bugfix import BugfixMetadata
 from model.abstractor.NodeAbstractor import IDMapping, NodeAbstractor, NodeMapping
 from model.abstractor.NodeMapper import ASTIdentifiers, ASTNode, IDTokens
 from model.abstractor.SafeASTLiteral import safe_ast_literal_eval
+from model.abstractor.SymbolTable import SymbolTable, CALLABLE_ROLE, SUBSCRIPTABLE_ROLE, VALUE_ROLE
+
+
+def infer_template_roles(template: ASTNode) -> Dict[str, str]:
+  """ Infers, for each abstract label appearing in a fix template, the
+  structural role it's used in (e.g. a Name used as `Call.func` needs a
+  callable; a Name used as `Subscript.value` needs a subscriptable).
+
+  Roles are inferred from the template's own structure -- the abstracted
+  fix pattern retains the exact syntactic position each label originally
+  had (see NodeAbstractor.abstract_node), so this only needs a single
+  parent-aware walk, done once per pattern.
+
+  :param template: The parsed (but not yet substituted) fix pattern.
+  :type  template: ASTNode
+  :rtype: Dict[str, str]
+  """
+  ast_identifiers = ['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']
+  roles: Dict[str, str] = {}
+
+  def visit(node: ASTNode, parent: Optional[ASTNode], field_name: Optional[str]) -> None:
+    for ast_id in ast_identifiers:
+      if hasattr(node, ast_id):
+        label = getattr(node, ast_id)
+        if isinstance(label, str) and label not in roles:
+          roles[label] = _role_for(node, parent, field_name)
+    for field, value in ast.iter_fields(node):
+      if isinstance(value, list):
+        for item in value:
+          if isinstance(item, ast.AST):
+            visit(item, node, field)
+      elif isinstance(value, ast.AST):
+        visit(value, node, field)
+
+  visit(template, None, None)
+  return roles
+
+
+def _role_for(node: ASTNode, parent: Optional[ASTNode], field_name: Optional[str]) -> str:
+  """ Determines the role of a single labeled node given its parent. """
+  if isinstance(node, ast.Name) and isinstance(parent, ast.Call) and field_name == 'func':
+    return CALLABLE_ROLE
+  if isinstance(node, ast.Name) and isinstance(parent, ast.Subscript) and field_name == 'value':
+    return SUBSCRIPTABLE_ROLE
+  return VALUE_ROLE
 
 
 class HypothesisAbductor(ast.NodeVisitor):
@@ -26,13 +71,19 @@ class HypothesisAbductor(ast.NodeVisitor):
   def __init__(self,
         node_to_abduct: ASTNode,
         bugfix: BugfixMetadata,
-        available_identifiers: IDTokens = []) -> None:
+        available_identifiers: IDTokens = [],
+        symbol_table: Optional[SymbolTable] = None) -> None:
     """ Constructor method """
     self.abducted_fix = None
     self.ast_identifiers = ['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']
     self.available_identifiers = self.merge_available_identifiers(
-                                          available_identifiers, 
+                                          available_identifiers,
                                           bugfix['available_identifiers'])
+    # Optional: narrows candidate identifiers by usage evidence (e.g.
+    # refuses to plug a never-called name into a Call.func slot) before
+    # the (expensive) Cartesian product/test evaluation stage. Absent,
+    # behavior is unchanged (no filtering).
+    self.symbol_table = symbol_table
     if node_to_abduct is None:
       self.actual_bug = None
     else:
@@ -117,6 +168,12 @@ class HypothesisAbductor(ast.NodeVisitor):
     The product is a n-tuple of the missing identifiers required
     to fill-up the missing identifiers during the abduction process.
 
+    When a symbol table is available, each slot's candidate identifiers
+    are first narrowed down to the ones with usage evidence compatible
+    with the slot's role (e.g. only names ever called elsewhere are
+    offered for a Call.func slot), so the search doesn't waste test runs
+    on combinations like calling an int variable as a function.
+
     :rtype: Type[itertools.product]
     """
     if self.actual_bug is None: return (iter([]), ())
@@ -129,8 +186,54 @@ class HypothesisAbductor(ast.NodeVisitor):
       for i in range(value):
         n_tuple_ordering.append(key)
         n_tuple.append(self.available_identifiers[key])
+
+    if self.symbol_table is not None:
+      slot_roles = self._infer_slot_roles(n_tuple_ordering)
+      n_tuple = [
+        self._filter_by_role(tokens, role)
+        for tokens, role in zip(n_tuple, slot_roles)
+      ]
+      if any(not tokens for tokens in n_tuple):
+        # A required slot has no role-compatible candidates left: this
+        # pattern is unsatisfiable with the current local vocabulary.
+        return (iter([]), n_tuple_ordering)
+
     # The starred expression is used to unpack a iterable
     return (itertools.product(*n_tuple), n_tuple_ordering)
+
+  def _infer_slot_roles(self, ordering: List[str]) -> List[str]:
+    """ Determines the role of each `n_tuple` slot, in order.
+
+    This mirrors the label-assignment bookkeeping in
+    `next_abductive_mapping` (same starting counters, same increment
+    order) so slot `i` here lines up with whichever label
+    `next_abductive_mapping` will eventually assign to it.
+
+    :param ordering: The `n_tuple_ordering` produced alongside `n_tuple`.
+    :type  ordering: List[str]
+    :rtype: List[str]
+    """
+    try:
+      template = safe_ast_literal_eval(self.bugfix['fix_metadata']['abstract_node'])
+    except ValueError:
+      return [VALUE_ROLE] * len(ordering)
+    label_roles = infer_template_roles(template)
+    map_nodes_fix = self.actual_bug.map_nodes.copy()
+    roles = []
+    for order in ordering:
+      if order in map_nodes_fix:
+        map_nodes_fix[order] += 1
+      else:
+        map_nodes_fix[order] = 0
+      label = order + str(map_nodes_fix[order])
+      roles.append(label_roles.get(label, VALUE_ROLE))
+    return roles
+
+  def _filter_by_role(self, tokens: List[str], role: str) -> List[str]:
+    """ Narrows a slot's candidate tokens down to the role-compatible ones.
+    :rtype: List[str]
+    """
+    return [token for token in tokens if self.symbol_table.compatible(token, role)]
 
   def next_abductive_mapping(self) -> Tuple[IDMapping, NodeMapping]:
     """ This method generates a Tuple[IDMapping, NodeMapping].
