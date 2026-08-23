@@ -3,14 +3,16 @@ This module contains the HypothesisGenerator class.
 This class is in charge of generating new hypotheses to repair a defect.
 Also,it is one of the core modules used in the methodology.
 """
+import ast
 from copy import deepcopy
-from typing import List, Iterator, Tuple, Union, Type, Optional
+from typing import Callable, List, Iterator, Tuple, Union, Type, Optional
 from types import TracebackType
 from model.abstractor.NodeAbstractor import NodeAbstractor, NodeAbstraction
 from model.abstractor.PythonLLOC import PythonLLOC
 from model.abstractor.HypothesisAbductor import HypothesisAbductor
 from model.abstractor.NodeMapper import ASTNode, IDTokens
 from model.abstractor.SymbolTable import SymbolTable
+from model.abstractor.SubExpressionVisitor import get_boolop_operands
 import logger as AbinLogging
 import config as DebugController
 import re
@@ -52,6 +54,13 @@ class HypothesisGenerator():
         self.abductor = HypothesisAbductor
         self.node_abstractor = NodeAbstractor
         self.nested_node = None
+        # Set alongside self.matching_patterns: which AST node the active
+        # patterns were matched against (the whole LOC statement, or a
+        # specific sub-expression within it -- see get_boolop_operands),
+        # and how to splice a sub-expression fix back into a standalone
+        # header line. None/None means "whole statement" (the default).
+        self.active_bug_node: Optional[ASTNode] = None
+        self.active_rebuild: Optional[Callable[[ASTNode], ASTNode]] = None
 
     def get_bug_candidate(self) -> int:
         """ This method returns the next bug candidate in the iterator.
@@ -118,6 +127,46 @@ class HypothesisGenerator():
             self.matching_patterns = iter([])
             return (iter([]), 0)
     
+    def localize_bug_candidate(self, logical_loc: PythonLLOC) -> Tuple[MatchingPatterns, int]:
+        """ Finds matching patterns for the current bug candidate line.
+
+        Spectrum-based localization only identifies a suspicious *line*,
+        but a compound line (e.g. `if check(u) and authorize(p):`) may
+        only be buggy in one sub-expression, and the whole-line AST won't
+        match any DB pattern unless the entire line's shape does. This
+        tries the whole statement first (unchanged default behavior) and,
+        if that finds nothing, falls back to each boolean operand of an
+        `if`/`while` test individually, so a fix pattern only has to match
+        the specific sub-expression that's actually broken.
+
+        Sets self.active_bug_node/self.active_rebuild as a side effect,
+        to whichever granularity produced a match.
+
+        :param logical_loc: The current bug candidate's logical line.
+        :type  logical_loc: PythonLLOC
+        :rtype: Tuple[MatchingPatterns, int]
+        """
+        whole_statement = deepcopy(logical_loc.ast_node)
+        localization_candidates: List[Tuple[ASTNode, Optional[Callable]]] = [(whole_statement, None)]
+        for sub_candidate in get_boolop_operands(deepcopy(logical_loc.ast_node)):
+            localization_candidates.append((sub_candidate.node, sub_candidate.rebuild))
+
+        patterns: MatchingPatterns = iter([])
+        count = 0
+        for bug_node, rebuild in localization_candidates:
+            ast_hexdigest = self.abstract_bug_candidate(deepcopy(bug_node))
+            (patterns, count) = self.get_matching_patterns(ast_hexdigest)
+            if count:
+                self.active_bug_node = bug_node
+                self.active_rebuild = rebuild
+                return (patterns, count)
+
+        # Nothing matched at any granularity; keep the whole-statement
+        # node as the default so downstream logging/state stays sane.
+        self.active_bug_node = whole_statement
+        self.active_rebuild = None
+        return (patterns, count)
+
     def apply_bugfix_pattern(self,
         bugged_node: NodeAbstractor,
         pattern: MatchingPattern,
@@ -158,6 +207,12 @@ class HypothesisGenerator():
         while hypothesis is None:
             try:
                 hypothesis = next(self.hypotheses_set)
+                if self.active_rebuild is not None:
+                    # The abducted fix is only a sub-expression (e.g. one
+                    # operand of a compound `if`); splice it back into a
+                    # standalone header line before it's used as a hypothesis.
+                    rebuilt = self.active_rebuild(self.hypotheses_set.abducted_fix)
+                    hypothesis = ast.unparse(rebuilt)
                 if self.nested_node == 'elif' and re.search('if.*', hypothesis):
                     # Check if the hypothesis is part of an elif nested structure
                     hypothesis = 'el' + hypothesis
@@ -176,26 +231,21 @@ class HypothesisGenerator():
                         else:
                             model = self.model_src
                             logical_loc = self.LogicalLOC(self.candidate, '\n'.join(model))
-                            ast_bug_candidate = deepcopy(logical_loc.ast_node)
-                            ast_hexdigest = self.abstract_bug_candidate(ast_bug_candidate)
                             self.nested_node = logical_loc.get_nested_node()
-                            ast_bug_candidate = deepcopy(logical_loc.ast_node)
                             available_identifiers = logical_loc.get_available_identifiers()
-                            patterns = self.get_matching_patterns(ast_hexdigest)
-                            (self.matching_patterns, count) = patterns
+                            (self.matching_patterns, count) = self.localize_bug_candidate(logical_loc)
                             AbinLogging.debugging_logger.info(f"""
                             Current Candidate: {self.candidate}. Patterns Found: {count}
                             """
                             )
-                
+
                 model = self.model_src
                 logical_loc = self.LogicalLOC(self.candidate, '\n'.join(model))
                 self.nested_node = logical_loc.get_nested_node()
-                ast_bug_candidate = deepcopy(logical_loc.ast_node)
                 available_identifiers = logical_loc.get_available_identifiers()
                 symbol_table = SymbolTable.from_source('\n'.join(model))
                 self.hypotheses_set = self.apply_bugfix_pattern(
-                    ast_bug_candidate, pattern, available_identifiers, symbol_table)
+                    self.active_bug_node, pattern, available_identifiers, symbol_table)
                 self.hypotheses_set_complexity = pattern['complexity']
                 self.hypotheses_set_position = self.candidate
 

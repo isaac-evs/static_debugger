@@ -3,7 +3,32 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
-## 2026-08-23 &mdash; Filter incompatible hypothesis candidates via lightweight symbol table
+## Extend fault localization to boolean sub-expressions
+
+**Module:** `model/HypothesisGenerator.py`, `model/abstractor/SubExpressionVisitor.py`
+
+**Description:** Spectrum-based localization (Ochiai) ranks suspiciousness
+strictly at the Line-of-Code level, but AST pattern synthesis operates at
+the AST node/sub-expression level.
+
+**Impact:** If a faulty line contains a compound expression (e.g.
+`if check(u) and authorize(p):`), Ochiai flags the entire line, but the
+abduction engine had no way to target the specific sub-node that actually
+holds the defect &mdash; a fix pattern only matched if it happened to cover
+the *entire* line's structure.
+
+**Fix:** Added `get_boolop_operands()`, which decomposes an `if`/`while`
+test's boolean chain into its individual operands. `HypothesisGenerator`
+now tries the whole-statement candidate first (unchanged default behavior)
+and, only if that finds no matching patterns, falls back to matching each
+operand individually, splicing the abducted fix back into a standalone
+header line. Verified end-to-end with a pattern that only matches a single
+operand of a two-operand `and` expression: the fallback correctly finds and
+applies it while leaving the sibling operand untouched.
+
+---
+
+## Filter incompatible hypothesis candidates via lightweight symbol table
 
 **Commit:** `704231f`
 **Module:** `model/abstractor/HypothesisAbductor.py`, `model/HypothesisGenerator.py`
@@ -26,7 +51,7 @@ evaluation stage.
 
 ---
 
-## 2026-08-21 &mdash; Fix RCE via unsafe eval() of AST pattern metadata
+## Fix RCE via unsafe eval() of AST pattern metadata
 
 **Commit:** `c7fd06e`
 **Module:** `model/abstractor/HypothesisAbductor.py`, `model/abstractor/Bugfix.py`
@@ -47,7 +72,7 @@ Anything else raises `ValueError` instead of running.
 
 ---
 
-## 2026-08-21 &mdash; Fix tight coupling of search traversal and runtime evaluation
+## Fix tight coupling of search traversal and runtime evaluation
 
 **Commit:** `55cfd4f`
 **Module:** `AbinModel.py` (`start_auto_debugging`)
@@ -70,7 +95,7 @@ attributes mutated across recursive frames.
 
 ---
 
-## 2026-08-21 &mdash; Fix state mutation via disk scraping & dynamic import contamination
+## Fix state mutation via disk scraping & dynamic import contamination
 
 **Commit:** `4669e3c`
 **Module:** `model/HypothesisGenerator.py`, `model/core/ModelTester.py`, `model/HyphotesisTester.py`
@@ -95,7 +120,7 @@ unreachable in the live pipeline.
 
 ---
 
-## 2025-07-20 &mdash; ABD-14: Replace MongoDB daemon dependency with embedded SQLite
+## Replace MongoDB daemon dependency with embedded SQLite
 
 **Module:** System-wide architecture (`AbinModel`, `AbinDriver`, `cli.py`)
 
@@ -115,7 +140,7 @@ required.
 
 ---
 
-## 2025-07-20 &mdash; ABD-12: Headless CLI Orchestrator (decouple GUI)
+## Headless CLI Orchestrator (decouple GUI)
 
 **Module:** `AbinDriver.py` & Engine Orchestrator
 
