@@ -3,6 +3,28 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix "Hyphotesis" typo project-wide
+
+**Module:** `AbinModel.py`, `model/HyphotesisTester.py` &rarr; `model/HypothesisTester.py`, `model/HypothesisRefinement.py`, `model/EvaluationEngine.py`
+
+**Description:** "Hypothesis" was consistently misspelled "Hyphotesis"
+across a module filename, a class name, and several attributes/methods
+(`HyphotesisTester`, `hyphotesis_tester`, `bugfixing_hyphotesis`,
+`hyphotesis_testing`, `hyphotesis_refinement`).
+
+**Impact:** No functional effect (internally consistent), but confusing
+for anyone reading the code or building on top of it &mdash; especially the
+public-facing `bugfixing_hyphotesis` attribute reporting the final result.
+
+**Fix:** Renamed the file (`git mv`) and every identifier consistently.
+Left historical CHANGELOG entries as-is, since they're an accurate record
+of the code as it existed at the time.
+
+**Verified:** Full `Middle.py`/`HappyNumber.py` benchmarks unaffected;
+`abin.bugfixing_hypothesis` correctly reports the winning fix.
+
+---
+
 ## Remove unused get_ranked_candidates (missing self, would misroute args)
 
 **Module:** `model/core/AbinDebugger.py`

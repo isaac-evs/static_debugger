@@ -97,7 +97,7 @@ class ModelConstructor():
            return None
        ast.fix_missing_locations(new_tree)
        return ast.unparse(new_tree)
-class HyphotesisTester(ModelTester, ModelConstructor):
+class HypothesisTester(ModelTester, ModelConstructor):
    """ This class' goal is to test a hypothesis.
    It inherits from ModelTester and ModelConstructor. """
    prev_observation: Observation
@@ -106,7 +106,7 @@ class HyphotesisTester(ModelTester, ModelConstructor):
        src_code: Union[List[str], str], target_function: str,
        test_suite: TestSuite, hypothesis: Hypothesis) -> None:
        """ Constructor Method """
-       AbinLogging.debugging_logger.debug('Init HyphotesisTester')
+       AbinLogging.debugging_logger.debug('Init HypothesisTester')
 
        new_model_code = self.build_hypothesis_model(hypothesis, src_code)
        super().__init__(new_model_code, target_function, test_suite)

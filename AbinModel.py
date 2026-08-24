@@ -6,7 +6,7 @@ import sys
 from typing import List, NamedTuple, Optional, Type, Tuple, Union
 from types import TracebackType
 from model.core.ModelTester import TestCase, Observation, InfluencePath, Behavior
-from model.HyphotesisTester import HyphotesisTester
+from model.HypothesisTester import HypothesisTester
 from model.FaultLocalizator import FaultLocalizator
 from model.HypothesisGenerator import Hypothesis, HypothesisGenerator
 from model.HypothesisRefinement import AbductionSchema
@@ -18,7 +18,7 @@ import config as DebugController
 
 
 Localizator = FaultLocalizator
-Tester = HyphotesisTester
+Tester = HypothesisTester
 Generator = HypothesisGenerator
 Refinement = 'HypothesisRefinement'
 
@@ -54,17 +54,17 @@ class AbinModel():
     bugged_file_path: str
     test_suite: List[TestCase]
     fault_localizator: Localizator
-    hyphotesis_tester: Tester
+    hypothesis_tester: Tester
     hypotheses_generator: Generator
     current_behavior: Behavior
     max_complexity: int
     candidate: int
-    bugfixing_hyphotesis: str
+    bugfixing_hypothesis: str
 
     def __init__(self, function_name: str, bugged_file_path: str, test_suite: List[TestCase],
                 max_complexity: int, abduction_schema: AbductionSchema = AbductionSchema.DFS,
                 localizator: Localizator = FaultLocalizator,
-                tester: Tester = HyphotesisTester,
+                tester: Tester = HypothesisTester,
                 generator: Generator = HypothesisGenerator) -> None:
         """ Constructor Method """
         self.function_name = function_name
@@ -76,9 +76,9 @@ class AbinModel():
         self.abduction_schema = abduction_schema
         self.search_schema: Type[SearchSchema] = SEARCH_SCHEMAS[abduction_schema]
         self.candidate = None
-        self.bugfixing_hyphotesis = None
+        self.bugfixing_hypothesis = None
         self.fault_localizator = localizator
-        self.hyphotesis_tester = tester
+        self.hypothesis_tester = tester
         self.hypotheses_generator = generator
         self.evaluation_engine = EvaluationEngine(function_name, test_suite, tester)
 
@@ -98,7 +98,7 @@ class AbinModel():
         result = self._search(model_src_code, improvement_candidates_set, depth=0)
         self.abduction_depth = result.depth
         self.candidate = result.candidate
-        self.bugfixing_hyphotesis = result.hypothesis[0] if result.behavior == Behavior.Correct else None
+        self.bugfixing_hypothesis = result.hypothesis[0] if result.behavior == Behavior.Correct else None
         return (result.model_src_code, result.behavior, result.prev_observation, result.new_observation)
 
     def _search(self, model_src_code, improvement_candidates_set, depth: int) -> SearchResult:
@@ -276,7 +276,7 @@ class AbinModel():
         """
         return self.hypotheses_generator(influence_path, src_code, max_complexity)
 
-    def hyphotesis_testing(self,
+    def hypothesis_testing(self,
         prev_observation: Observation,
         src_code: Union[List[str], str],
         hypothesis: Hypothesis) -> Tuple[Behavior, Observation]:
@@ -293,7 +293,7 @@ class AbinModel():
         """
         return self.evaluation_engine.evaluate(prev_observation, src_code, Candidate(hypothesis))
 
-    def hyphotesis_refinement(self):
+    def hypothesis_refinement(self):
         pass
 
     def __enter__(self):

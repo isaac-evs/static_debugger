@@ -5,7 +5,7 @@ Also, it is one of the core modules used in the methodology.
 """
 from typing import Tuple, Iterator
 import logger as AbinLogging
-from model.HyphotesisTester import ModelConstructor
+from model.HypothesisTester import ModelConstructor
 from model.HypothesisGenerator import Hypothesis, Hypotheses
 from itertools import tee as n_plicate_iterator
 ImprovementCadidates = Iterator[Hypotheses]

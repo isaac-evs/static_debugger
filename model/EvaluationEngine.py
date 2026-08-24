@@ -9,7 +9,7 @@ traversal that drives it.
 """
 from typing import List, NamedTuple, Type, Union
 from model.core.ModelTester import Behavior, Observation, TestSuite
-from model.HyphotesisTester import HyphotesisTester
+from model.HypothesisTester import HypothesisTester
 from model.HypothesisGenerator import Hypothesis
 from model.SearchSchema import Candidate
 
@@ -27,7 +27,7 @@ class EvaluationEngine():
     their fitness, independently of how the search chose to visit them. """
 
     def __init__(self, target_function: str, test_suite: TestSuite,
-        tester: Type[HyphotesisTester] = HyphotesisTester) -> None:
+        tester: Type[HypothesisTester] = HypothesisTester) -> None:
         """ Constructor Method """
         self.target_function = target_function
         self.test_suite = test_suite
