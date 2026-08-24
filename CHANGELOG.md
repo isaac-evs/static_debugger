@@ -3,6 +3,28 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Replace deprecated ast.Str docstring check with ast.Constant
+
+**Module:** `model/FaultLocalizator.py` (`parse_model`)
+
+**Description:** Docstring stripping checked `isinstance(node.value, ast.Str)`.
+`ast.Str` was deprecated in Python 3.8 in favor of `ast.Constant`, kept
+only as a compatibility shim, and is slated for removal in Python 3.14.
+
+**Impact:** Not broken today (the compat shim still correctly
+distinguishes string constants on 3.12), but emits a `DeprecationWarning`
+on every check and will raise outright once this project moves to 3.14.
+
+**Fix:** Replaced with `isinstance(node.value, ast.Constant) and
+isinstance(node.value.value, str)`.
+
+**Verified:** Ran under `-W error::DeprecationWarning` to confirm zero
+warnings fire; a real docstring is still stripped correctly, and a bare
+numeric expression statement (not a docstring) is correctly left alone.
+Full `Middle.py` benchmark unaffected.
+
+---
+
 ## Fix short-circuited predicate that silently dropped bound methods
 
 **Module:** `model/core/AbinDebugger.py` (`get_all_func_names`)

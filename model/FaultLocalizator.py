@@ -122,7 +122,10 @@ class FaultLocalizator(ModelTester, HypothesisRefinement):
                     continue
                 if not isinstance(node.body[0], ast.Expr):
                     continue
-                if not hasattr(node.body[0], 'value') or not isinstance(node.body[0].value, ast.Str):
+                if not hasattr(node.body[0], 'value'):
+                    continue
+                docstring_value = node.body[0].value
+                if not (isinstance(docstring_value, ast.Constant) and isinstance(docstring_value.value, str)):
                     continue
                 node.body = node.body[1:]
         finally:
