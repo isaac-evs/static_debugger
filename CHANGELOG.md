@@ -3,33 +3,20 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
-## Remove dead inspect.getsource()/linecache-touching code
+## Remove unused inspect.getsource()-based code
 
 **Module:** `model/core/AbinDebugger.py`, `model/debugger/StatisticalDebugger.py`
 
-**Description:** Investigated a reported bug where all candidate models
-share the fake compiled filename `'<model_in_test>'`, and `linecache`
-(used internally by `inspect.getsource`) could theoretically serve stale
-source lines from an earlier candidate for a later one.
+**Description:** `AbinDebugger.get_model_ast` and `SpectrumDebugger.code()`
+(plus its `_repr_html_`/`__str__`/`__repr__` wrappers) had no callers
+anywhere in the codebase &mdash; `get_model_ast` is simply never invoked, and
+`SpectrumDebugger`'s `__str__`/`__repr__` are fully shadowed in
+`AbinDebugger`'s MRO by `RankingDebugger`'s (confirmed via `__mro__`
+inspection), so `code()` could never actually run.
 
-**Finding:** Not a live bug in the current code. Verified directly:
-`ModelTester` no longer touches `sys.modules` or uses a custom loader
-(fixed in an earlier disk-scraping/dynamic-import cleanup), and
-`linecache` never actually caches anything for a synthetic bracketed
-filename like `'<model_in_test>'` (no real file, no `get_source()`
-loader) &mdash; confirmed two different candidates sharing that filename
-produce correct, non-stale tracebacks. The only two call sites that would
-have been affected, `AbinDebugger.get_model_ast` and
-`SpectrumDebugger.code()` (plus its `_repr_html_`/`__str__`/`__repr__`
-wrappers), turned out to be unreachable: `AbinDebugger.get_model_ast` has
-no callers anywhere, and `SpectrumDebugger`'s `__str__`/`__repr__` are
-fully shadowed in `AbinDebugger`'s MRO by `RankingDebugger`'s (confirmed
-via `__mro__` inspection), so `code()` could never actually run.
-
-**Fix:** Removed the dead code instead of adding an unneeded defensive
-fix. Bonus: this also drops the module's last usage of `cgitb`
-(deprecated since 3.11, removed entirely in 3.13), so this file no longer
-carries that particular ticking time bomb either.
+**Fix:** Deleted both, rather than keep unused surface area around. Also
+removes the module's last usage of `cgitb` (deprecated since 3.11, removed
+entirely in 3.13) and `inspect`, since nothing else in the file needed them.
 
 ---
 
