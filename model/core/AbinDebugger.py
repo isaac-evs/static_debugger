@@ -9,8 +9,6 @@ from model.debugger.AbinCollector import AbinCollector
 from model.debugger.StatisticalDebugger import OchiaiDebugger
 from typing import Union, Tuple, Type, List, Dict, Optional
 from types import TracebackType, ModuleType
-from model.abstractor.NodeMapper import ASTNode
-from model.abstractor.Visitors import TargetVisitor, CallVisitor, FunctionVisitor, StatementVisitor
 import config as DebugController
 
 InfluencePath = List[Tuple[str, int]]
@@ -96,29 +94,6 @@ class AbinDebugger(OchiaiDebugger):
     def susp_threshold_filter(self, 
         events_susp: List[Tuple[str, int, float]]) -> List[Tuple[str, int, float]]:
         return [x for x in events_susp if x[2] >= self.susp_threshold]
-
-    def get_ranked_candidates(target_func: str, rank: Dict[str, int], ast_tree: ASTNode):
-        """Return a list of failure candidates.
-        
-        The list is sorted by suspiciousness (Ochiai Metric)
-        and statistical ranking.
-
-        :param model: The module that holds the bugged program.
-        :type  model: ModuleType
-        :param target_func: The function that triggers the bugged program.
-        :type  target_func: str
-        :rtype: InfluencePath
-        """
-        target = TargetVisitor(target_func, ast_tree)
-        calls = CallVisitor(target.func_names, target.target_node)
-        target_funcs = FunctionVisitor(calls.call_names, ast_tree)
-        _STMT_ALL = set()
-        stmt_target = StatementVisitor(rank, target.target_node)
-        _STMT_ALL = _STMT_ALL | stmt_target.statements
-        for node in target_funcs.func_nodes:
-            stmt_nodes = StatementVisitor(rank, node)
-            _STMT_ALL = _STMT_ALL | stmt_nodes.statements
-        return sorted(_STMT_ALL, key=lambda x: x[2])
 
     @classmethod
     def get_statistical_ranking(cls) -> Dict[str, int]:

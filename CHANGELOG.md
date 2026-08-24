@@ -3,6 +3,24 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Remove unused get_ranked_candidates (missing self, would misroute args)
+
+**Module:** `model/core/AbinDebugger.py`
+
+**Description:** `get_ranked_candidates` was defined inside `AbinDebugger`
+with no `self`/`cls` parameter and no `@staticmethod` decorator, so calling
+it on an instance (`abin.get_ranked_candidates(...)`) would pass `self` as
+the first positional argument (`target_func`), misrouting every argument.
+
+**Finding:** Not reachable in practice: it has no callers anywhere in the
+codebase.
+
+**Fix:** Deleted the method instead of fixing a bug in dead code, along
+with the `TargetVisitor`/`CallVisitor`/`FunctionVisitor`/`StatementVisitor`/
+`ASTNode` imports that existed only to support it.
+
+---
+
 ## Replace deprecated ast.Str docstring check with ast.Constant
 
 **Module:** `model/FaultLocalizator.py` (`parse_model`)
