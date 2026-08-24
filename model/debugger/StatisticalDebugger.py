@@ -17,11 +17,9 @@ Andreas Zeller: "The Debugging Book". Retrieved 2022-02-02 19:00:00-06:00.
 }
 """
 from model.debugger.Collector import Collector, CoverageCollector
-import inspect
 from types import TracebackType
-from typing import Any, Set, Dict, Callable, Optional, Type, List, Union
+from typing import Any, Set, Dict, Optional, Type, List, Union
 import math
-from cgitb import html
 
 
 class StatisticalDebugger():
@@ -159,80 +157,6 @@ class SpectrumDebugger(DifferenceDebugger):
         else:
             return ' ' * len('100%')
 
-    def code(self, functions: Optional[Set[Callable]] = None, *, 
-             color: bool = False, suspiciousness: bool = False,
-             line_numbers: bool = True) -> str:
-        """
-        Return a listing of `functions` (default: covered functions).
-        If `color` is True, render as HTML, using suspiciousness colors.
-        If `suspiciousness` is True, include suspiciousness values.
-        If `line_numbers` is True (default), include line numbers.
-        """
-
-        if not functions:
-            functions = self.covered_functions()
-
-        out = ""
-        seen = set()
-        for function in functions:
-            source_lines, starting_line_number = \
-               inspect.getsourcelines(function)
-
-            if (function.__name__, starting_line_number) in seen:
-                continue
-            seen.add((function.__name__, starting_line_number))
-
-            if out:
-                out += '\n'
-                if color:
-                    out += '<p/>'
-
-            line_number = starting_line_number
-            for line in source_lines:
-                if color:
-                    line = html.escape(line)
-                    if line.strip() == '':
-                        line = '&nbsp;'
-
-                location = (function.__name__, line_number)
-                location_suspiciousness = self.suspiciousness(location)
-                if location_suspiciousness is not None:
-                    tooltip = f"Line {line_number}: {self.tooltip(location)}"
-                else:
-                    tooltip = f"Line {line_number}: not executed"
-
-                if suspiciousness:
-                    line = self.percentage(location) + ' ' + line
-
-                if line_numbers:
-                    line = str(line_number).rjust(4) + ' ' + line
-
-                line_color = self.color(location)
-
-                if color and line_color:
-                    line = f'''<pre style="background-color:{line_color}"
-                    title="{tooltip}">{line.rstrip()}</pre>'''
-                elif color:
-                    line = f'<pre title="{tooltip}">{line}</pre>'
-                else:
-                    line = line.rstrip()
-
-                out += line + '\n'
-                line_number += 1
-
-        return out
-
-    def _repr_html_(self) -> str:
-        """When output in Jupyter, visualize as HTML"""
-        return self.code(color=True)
-
-    def __str__(self) -> str:
-        """Show code as string"""
-        return self.code(color=False, suspiciousness=True)
-
-    def __repr__(self) -> str:
-        """Show code as string"""
-        return self.code(color=False, suspiciousness=True)
 
 
 

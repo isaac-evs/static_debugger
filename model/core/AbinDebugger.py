@@ -136,19 +136,6 @@ class AbinDebugger(OchiaiDebugger):
         from inspect import getmembers, isfunction, ismethod
         return [func_name for func_name, _ in getmembers(module, isfunction or ismethod)]
 
-    @staticmethod
-    def get_model_ast(module: ModuleType) -> ASTNode:
-        """Return the abstract syntax tree of the provided module.
-
-        :param model: The module that holds the bugged program.
-        :type  model: ModuleType
-        :rtype: ASTNode
-        """
-        from inspect import getsource
-        from ast import parse
-        src = getsource(module)
-        return parse(src)
-
     def __str__(self) -> str:
         """ Class String representation method """
         return self.__repr__()
