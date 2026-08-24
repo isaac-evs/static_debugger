@@ -3,6 +3,30 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix short-circuited predicate that silently dropped bound methods
+
+**Module:** `model/core/AbinDebugger.py` (`get_all_func_names`)
+
+**Description:** `getmembers(module, isfunction or ismethod)` &mdash; since
+`isfunction` is itself a truthy function object, `isfunction or ismethod`
+evaluates to `isfunction` alone at the `or` expression, before `getmembers`
+is even called; `ismethod` is never consulted.
+
+**Impact:** Any module-level bound method reference would be silently
+excluded from the function names used to filter suspicious-ranking
+events, since it's neither caught by `isfunction` nor ever checked
+against `ismethod`.
+
+**Fix:** Replaced the bare `isfunction or ismethod` with an actual
+predicate function, `lambda obj: isfunction(obj) or ismethod(obj)`.
+
+**Verified:** A module-level plain function and a module-level bound
+method reference are both now found by `get_all_func_names` (only the
+plain function was found before the fix). Full `Middle.py` benchmark
+unaffected.
+
+---
+
 ## Stop stripping string literals out of reconstructed logical lines
 
 **Module:** `model/abstractor/PythonLLOC.py` (`logical_LOC`)

@@ -134,7 +134,8 @@ class AbinDebugger(OchiaiDebugger):
         :rtype: List[str]
         """
         from inspect import getmembers, isfunction, ismethod
-        return [func_name for func_name, _ in getmembers(module, isfunction or ismethod)]
+        return [func_name for func_name, _ in
+            getmembers(module, lambda obj: isfunction(obj) or ismethod(obj))]
 
     def __str__(self) -> str:
         """ Class String representation method """
