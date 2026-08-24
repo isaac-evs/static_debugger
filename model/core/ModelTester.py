@@ -145,32 +145,38 @@ class ModelTester():
        AbinLogging.debugging_logger.info(f"Starting Model Testing...")
        for i, test_case, expected_output, *input_args in self.test_suite.itertuples():
            AbinLogging.debugging_logger.info(f"Testing {test_case}...")
-           with debugger:
-               signal.setitimer(signal.ITIMER_REAL, DebugController.TEST_TIMEOUT)
-               if self.func is None:
-                   raise ImportError(f"""
-                       Failed to import the given function {self.target_function} from the model {self.model.__name__}.
-                       Please check that the given parameter 'func' correspond to a function in the model.
+           try:
+               with debugger:
+                   signal.setitimer(signal.ITIMER_REAL, DebugController.TEST_TIMEOUT)
+                   if self.func is None:
+                       raise ImportError(f"""
+                           Failed to import the given function {self.target_function} from the model {self.model.__name__}.
+                           Please check that the given parameter 'func' correspond to a function in the model.
+                           """
+                       )
+                   test_result = self.func(*input_args)
+                   AbinLogging.debugging_logger.debug(f"""
+                       test_result == expected_output
+                       {str(test_result)} == {str(expected_output)}?
                        """
                    )
-               test_result = self.func(*input_args)
-               AbinLogging.debugging_logger.debug(f"""
-                   test_result == expected_output
-                   {str(test_result)} == {str(expected_output)}?
-                   """
-               )
-               if str(test_result) == str(expected_output):
-                   new_observation[i] = (test_case, PassedTest)
-               else:
-                   new_observation[i] = (test_case, FailedTest)
-                   raise AssertionError(f"""
-                       The result and the expected output are not equal.
-                       Result: {test_result}
-                       Expected: {expected_output}
-                       """
-                   )
+                   if str(test_result) == str(expected_output):
+                       new_observation[i] = (test_case, PassedTest)
+                   else:
+                       new_observation[i] = (test_case, FailedTest)
+                       raise AssertionError(f"""
+                           The result and the expected output are not equal.
+                           Result: {test_result}
+                           Expected: {expected_output}
+                           """
+                       )
+           finally:
+               # Guaranteed to run even if the debugger's __exit__ decides
+               # to re-raise (e.g. an internal tracer error): otherwise the
+               # OS alarm clock armed above keeps running in the background
+               # and can fire mid-way through a later, unrelated test.
+               signal.setitimer(signal.ITIMER_REAL, 0)
 
-           signal.setitimer(signal.ITIMER_REAL, 0)
            if check_consistency and new_observation[i][1] == FailedTest:
                AbinLogging.debugging_logger.debug('check_consistency')
                is_consistent_ = self.check_result_consistency(new_observation[i], i)

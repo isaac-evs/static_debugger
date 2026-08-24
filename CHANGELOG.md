@@ -3,6 +3,33 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix dangling SIGALRM leaking across sequential test runs
+
+**Module:** `model/core/ModelTester.py` (`model_testing`), `model/core/AbinDebugger.py` (`__exit__`)
+
+**Description:** The test-timeout timer (`signal.setitimer(ITIMER_REAL, TEST_TIMEOUT)`)
+was armed inside `with debugger:` and disarmed (`setitimer(..., 0)`) on the
+line right after the block, with no `try`/`finally` between them.
+
+**Impact:** When a candidate patch caused a runtime exception, some
+exception paths make `AbinDebugger.__exit__` return `False` (re-raising
+instead of swallowing) &mdash; that skips the disarm line entirely, leaving the
+OS alarm clock armed in the background. It then fires `SIGALRM`
+asynchronously mid-way through a later, unrelated test, crashing it with a
+spurious `TimeoutError`.
+
+**Fix:** Wrapped the per-test-case execution in `try`/`finally`, so
+`signal.setitimer(ITIMER_REAL, 0)` always runs regardless of which path
+`__exit__` takes.
+
+**Verified:** Reproduced the exact re-raise path (a `ModelTester` whose
+target function doesn't exist, so no `call` event is ever captured) and
+confirmed that before the fix the timer was left armed with ~5 seconds
+still pending after the exception propagated; after the fix it's reliably
+`(0.0, 0.0)` in every case. Full `Middle.py` benchmark unaffected.
+
+---
+
 ## Upgrade SBL tracing to sys.monitoring (PEP 669) and fix function-wrapper cache
 
 **Module:** `model/debugger/Tracer.py`, `model/debugger/StackInspector.py`, `model/debugger/Collector.py`, `model/debugger/AbinCollector.py`
