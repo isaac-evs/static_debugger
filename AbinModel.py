@@ -323,6 +323,30 @@ class AbinModel():
 
 
 
+def coerce_expected_output(value):
+  """ Best-effort type coercion for an `expected_output` CSV cell.
+
+  Unlike input-arg columns, `expected_output` carries no `:type`
+  annotation, so its type has to be inferred: try to parse it as a
+  Python literal (covers ints/floats/bools/None/lists/tuples/dicts),
+  falling back to the raw string when it isn't one (e.g. plain
+  unquoted text like a password-strength label). This lets test
+  assertions compare typed values directly instead of stringified
+  representations, which is both more correct (`1.0 == 1` but
+  `str(1.0) != str(1)`) and immune to incidental formatting
+  differences between how a sequence was written in the CSV and how
+  Python's own str()/repr() renders it (e.g. "[1,2,3]" vs "[1, 2, 3]").
+
+  :param value: The raw CSV cell.
+  :type  value: str
+  :rtype: Any
+  """
+  from ast import literal_eval
+  try:
+    return literal_eval(value)
+  except (ValueError, SyntaxError):
+    return value
+
 def parse_csv_data(data):
   from json import loads
   import builtins
@@ -330,7 +354,7 @@ def parse_csv_data(data):
   parsed_types = []
   columnsNames = list(data.columns)
   parsed_data[columnsNames[0]] = data[columnsNames[0]] # test_cases
-  parsed_data[columnsNames[1]] = data[columnsNames[1]] # expected_output
+  parsed_data[columnsNames[1]] = data[columnsNames[1]].map(coerce_expected_output) # expected_output
   columnsNames = columnsNames[2:] # skip test_cases and expected_output columns
   for colName in columnsNames:
     newColName, castType = map(str.strip, colName.split(':'))

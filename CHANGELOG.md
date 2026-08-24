@@ -3,6 +3,36 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Compare typed test results instead of their string representations
+
+**Module:** `AbinModel.py` (`parse_csv_data`), `model/core/ModelTester.py` (`model_testing`)
+
+**Description:** Test assertions compared `str(test_result) == str(expected_output)`.
+`expected_output` has no `:type` annotation in the CSV (unlike input-arg
+columns, which already use `json.loads` for `list`/`tuple`/`dict`), so it
+was always left as a raw string.
+
+**Impact:** `str()`-comparison is both incorrect and formatting-fragile:
+`str(1.0) != str(1)` and `str(True) != str(1)` despite being equal values,
+and a sequence written as `"[1,2,3]"` in the CSV would never match a
+function returning `[1, 2, 3]` (Python's own `str()` adds a space after
+each comma) even though the values are identical.
+
+**Fix:** Added `coerce_expected_output()`, applied to the whole
+`expected_output` column in `parse_csv_data`: tries `ast.literal_eval` to
+recover the real typed value (int/float/bool/None/list/tuple/dict/...),
+falling back to the raw string when the cell isn't a valid literal (e.g.
+unquoted text like a password-strength label). `model_testing` now
+compares `test_result == expected_output` directly (wrapped in a
+try/except, so an exotic `__eq__` can't crash the test loop) instead of
+stringifying both sides.
+
+**Verified:** All three failure modes above now pass correctly
+(`[1,2,3]`-vs-`[1, 2, 3]`, `True`-vs-`"1"`, `1.0`-vs-`"1"`). Full
+`Middle.py`/`HappyNumber.py`/`BitonicSort.py` benchmarks unaffected.
+
+---
+
 ## Fix constant abstraction corrupted by deprecated ast.Num/ast.Str shims
 
 **Module:** `model/abstractor/NodeMapper.py`, `NodeAbstractor.py`, `HypothesisAbductor.py`

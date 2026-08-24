@@ -160,7 +160,18 @@ class ModelTester():
                        {str(test_result)} == {str(expected_output)}?
                        """
                    )
-                   if str(test_result) == str(expected_output):
+                   try:
+                       # Compare the typed values directly (expected_output
+                       # is coerced from its raw CSV string by
+                       # coerce_expected_output()), not their str()
+                       # representations: str()-comparison is both
+                       # incorrect (1.0 != "1") and formatting-fragile for
+                       # sequences ("[1,2,3]" != "[1, 2, 3]" even though
+                       # the underlying values are equal).
+                       test_passed = bool(test_result == expected_output)
+                   except Exception:
+                       test_passed = False
+                   if test_passed:
                        new_observation[i] = (test_case, PassedTest)
                    else:
                        new_observation[i] = (test_case, FailedTest)
