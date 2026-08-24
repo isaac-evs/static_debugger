@@ -30,11 +30,6 @@ class AbinCollector(CoverageCollector):
         if DebugController.TIMEOUT_SIGNAL_RECEIVED == 1:
             DebugController.TIMEOUT_SIGNAL_RECEIVED = 2
             raise TimeoutError('DEBUG_SINAL_RECEIVED')
-        name = frame.f_code.co_name
-        function = self.search_func(name, frame)
-
-        if function is None:
-            function = self.create_function(frame)
-
+        function = self.resolve_function(frame)
         location = (function, frame.f_lineno)
         self._coverage.add(location)

@@ -19,7 +19,7 @@ import inspect
 import warnings
 import traceback
 
-from types import FunctionType, FrameType, TracebackType
+from types import CodeType, FunctionType, FrameType, TracebackType
 from typing import Any, Dict, Tuple, Callable, Optional, Type, cast
 
 Location = Tuple[Callable, int]
@@ -82,16 +82,36 @@ class StackInspector():
         frame, func = self.search_frame(name, frame)
         return func
 
-    # Avoid generating functions more than once
-    _generated_function_cache: Dict[Tuple[str, int], Callable] = {}
+    def _cache(self, attr_name: str) -> Dict[CodeType, Callable]:
+        """ Returns a per-instance cache dict, created lazily on first use.
+
+        Lazily-initialized (rather than set up in __init__) since several
+        subclasses define their own __init__ without calling super(), and
+        kept per-instance (not class-level) so it doesn't outlive a single
+        traced test run -- each candidate model compiles a brand new code
+        object, so a cache shared across the whole process would just grow
+        forever, holding every past candidate's functions alive.
+        :rtype: Dict[CodeType, Callable]
+        """
+        cache = self.__dict__.get(attr_name)
+        if cache is None:
+            cache = {}
+            self.__dict__[attr_name] = cache
+        return cache
 
     def create_function(self, frame: FrameType) -> Callable:
         """Create function for given frame"""
-        name = frame.f_code.co_name
-        cache_key = (name, frame.f_lineno)
-        if cache_key in self._generated_function_cache:
-            return self._generated_function_cache[cache_key]
+        cache = self._cache('_generated_function_cache')
+        # Keyed by the code object itself: it's unique per compiled
+        # function and constant across every line/event of one execution,
+        # unlike (name, lineno) which changes on every traced line and
+        # can also collide across independently-compiled candidate models
+        # that happen to reuse the same function name/line number.
+        code = frame.f_code
+        if code in cache:
+            return cache[code]
 
+        name = code.co_name
         try:
             # Create new function from given code
             generated_function = cast(Callable,
@@ -109,9 +129,31 @@ class StackInspector():
                           f" ({type(exc).__name__}: {exc})")
             generated_function = self.unknown
 
-        self._generated_function_cache[cache_key] = generated_function
+        cache[code] = generated_function
         return generated_function
-    
+
+    def resolve_function(self, frame: FrameType) -> Callable:
+        """ Resolves the function object corresponding to a traced frame.
+
+        Combines search_func()/create_function() with a per-code-object
+        cache, so repeated calls for the same function across many traced
+        lines/events don't repeat the stack walk (search_func) or function
+        creation (create_function) every single time.
+        :rtype: Callable
+        """
+        cache = self._cache('_resolved_function_cache')
+        code = frame.f_code
+        if code in cache:
+            return cache[code]
+
+        function = self.search_func(code.co_name, frame)
+        if function is None:
+            function = self.create_function(frame)
+
+        cache[code] = function
+        return function
+
+
     def caller_function(self) -> Callable:
         """Return the calling function"""
         frame = self.caller_frame()

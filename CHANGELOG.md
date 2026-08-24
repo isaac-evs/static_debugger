@@ -3,6 +3,44 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Upgrade SBL tracing to sys.monitoring (PEP 669) and fix function-wrapper cache
+
+**Module:** `model/debugger/Tracer.py`, `model/debugger/StackInspector.py`, `model/debugger/Collector.py`, `model/debugger/AbinCollector.py`
+**Requires:** Python 3.12+ (bumped from 3.9; see `.python-version`/`requirements.txt`)
+
+**Description:** SBL instrumentation relied on legacy `sys.settrace` hooks, and
+inside the tracing hooks `StackInspector.create_function` was caching by
+`(function_name, lineno)` &mdash; a key that changes on almost every traced
+line, so it failed to deduplicate and effectively created a new `FunctionType`
+wrapper per line anyway.
+
+**Impact:** `sys.settrace` hands a full frame to Python on every single event,
+introducing a heavy execution penalty on iterative/recursive code. On top of
+that, the ineffective cache meant thousands of redundant `FunctionType`
+allocations per test run (measured: a `fib(20)` trace alone would have
+produced 87,566 `FunctionType` objects for 2 actual functions), adding GC
+pressure on longer benchmark runs.
+
+**Fix:** Replaced `sys.settrace` with `sys.monitoring` (PEP 669) &mdash; the
+project now requires Python 3.12+ for this. `sys.settrace` is kept only as a
+defensive fallback if a monitoring tool slot can't be claimed. Fixed
+`create_function`'s cache to key on the code object itself (unique per
+compiled function, constant across every line of one execution, and safe
+against cross-run collisions between independently-compiled candidate
+models). Added `resolve_function()`, a cached combination of
+`search_func`/`create_function`, and switched `CoverageCollector`/
+`AbinCollector` to use it instead of duplicating that lookup on every event.
+Caches are per-instance (not class-level), so they don't accumulate stale
+entries across the lifetime of a long repair session.
+
+Verified: `sys.monitoring` correctly active end-to-end (confirmed via tool-id
+introspection), the SIGALRM test-timeout mechanism still interrupts correctly
+under the new tracer, the cache fix reduces a `fib(20)` trace from 87,566
+`FunctionType` allocations down to 2, and the full `Middle.py`/`HappyNumber.py`
+benchmarks are unaffected.
+
+---
+
 ## Extend fault localization to boolean sub-expressions
 
 **Module:** `model/HypothesisGenerator.py`, `model/abstractor/SubExpressionVisitor.py`

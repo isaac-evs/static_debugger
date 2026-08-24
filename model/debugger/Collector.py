@@ -142,12 +142,7 @@ class CoverageCollector(Collector, StackInspector):
         """
         Save coverage for an observed event.
         """
-        name = frame.f_code.co_name
-        function = self.search_func(name, frame)
-
-        if function is None:
-            function = self.create_function(frame)
-
+        function = self.resolve_function(frame)
         location = (function, frame.f_lineno)
         self._coverage.add(location)
 
