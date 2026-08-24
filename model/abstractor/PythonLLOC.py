@@ -36,6 +36,12 @@ class PythonLLOC(NodeMapper):
     curr_LOC_start: int = 0
     found_LOC = False
     first_token = True
+    # Tokens accumulated for the *current* logical line, tracked
+    # separately from curr_LOC so a docstring/bare string-literal
+    # statement (a line whose entire content is a single STRING token)
+    # can be told apart from a string that's merely part of a larger
+    # statement (e.g. `elif c == "x":`), which must never be stripped.
+    line_tokens = []
     src_utf8 = self.source_code.encode('utf-8')
     bytes_io = BytesIO(src_utf8).readline
     tokens = tokenize.tokenize(bytes_io)
@@ -52,18 +58,32 @@ class PythonLLOC(NodeMapper):
 
       if token_line_start <= self.line_no <= token_line_end:
         found_LOC = True
-      
+
       if etype == tokenize.NEWLINE:
         if found_LOC:
+          # A logical line whose only content is a single STRING token
+          # is a docstring or a bare string-literal statement -- it has
+          # no meaningful structure to abduct a fix for, so skip it
+          # just like a comment-only line, instead of stripping the
+          # string out of a larger statement and leaving broken syntax
+          # behind (e.g. "elif c == or c == :").
+          if len(line_tokens) == 1 and line_tokens[0] == tokenize.STRING:
+            return (None, curr_LOC_start, token_line_end)
           break
         curr_LOC = ''
         curr_LOC_start = token_line_start + 1
+        line_tokens = []
         continue
 
-      # The process will skip comments, docstrings, encoding and non-terminating newlines.
-      if (etype == tokenize.COMMENT or etype == tokenize.STRING or
+      # The process will skip comments, encoding and non-terminating newlines.
+      if (etype == tokenize.COMMENT or
           etype == tokenize.ENCODING or etype == tokenize.NL):
         continue
+      # INDENT/DEDENT carry only whitespace and aren't part of the
+      # statement's own structure; don't let them count as "another
+      # token" when checking for a bare string-literal statement below.
+      if etype not in (tokenize.INDENT, tokenize.DEDENT):
+        line_tokens.append(etype)
       curr_LOC += string + ' '
     if re.search('\S', curr_LOC):
       return (curr_LOC, curr_LOC_start, token_line_end)

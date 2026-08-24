@@ -3,6 +3,33 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Stop stripping string literals out of reconstructed logical lines
+
+**Module:** `model/abstractor/PythonLLOC.py` (`logical_LOC`)
+
+**Description:** When reconstructing a logical line of code from tokenize
+output, every `STRING` token was unconditionally skipped, regardless of
+whether it was a standalone docstring or part of a larger statement.
+
+**Impact:** Any string literal embedded in a real statement (e.g.
+`elif c == "x" or c == "y":`) got stripped out along with genuine
+docstrings, producing broken text like `elif c == or c == :`. Verified
+directly with that exact input.
+
+**Fix:** Track the tokens on each logical line separately from the
+reconstructed text. A line is only treated as a skippable
+docstring/bare-string statement when its *entire* content is a single
+`STRING` token (nothing else) &mdash; any string that's part of a larger
+statement is now preserved.
+
+**Verified:** The exact reproduction (`elif c == "x" or c == "y":`) now
+reconstructs correctly; a true docstring-only line still correctly
+returns `None`; plain code with no strings and code with embedded string
+comparisons/assignments are all unaffected. Full `Middle.py`/
+`HappyNumber.py`/`PasswordStrength.py` benchmarks unaffected.
+
+---
+
 ## Remove unused clean_temporal_files (crashes if called, has no callers)
 
 **Module:** `model/FaultLocalizator.py`
