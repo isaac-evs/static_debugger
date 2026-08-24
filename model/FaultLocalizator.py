@@ -8,8 +8,6 @@ from model.abstractor.NodeMapper import ASTNode
 from model.core.ModelTester import ModelTester, TestSuite
 from model.HypothesisRefinement import HypothesisRefinement, ImprovementCadidates, AbductionSchema
 from typing import Union, List
-from pathlib import Path
-from shutil import rmtree as remove_dir
 import ast
 import astunparse
 import re
@@ -82,17 +80,6 @@ class FaultLocalizator(ModelTester, HypothesisRefinement):
             self._init_ModelTester(new_model_code, self.target_function, self.test_suite)
             return True
         return False
-
-    @staticmethod
-    def clean_temporal_files(curr_dir: Path) -> None:
-        """ This method cleans up the temporal files folder.
-        :param curr_dir: The path object to the temporal foler.
-        :type  curr_dir: Path
-        """
-        with curr_dir.joinpath('temp') as temp_dir:
-            if temp_dir.exists():
-                remove_dir(temp_dir)
-            temp_dir.mkdir(exist_ok=True)
 
     def prepare_model(self, path) -> str:
         """ This method prepares the provided model/program.

@@ -3,6 +3,25 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Remove unused clean_temporal_files (crashes if called, has no callers)
+
+**Module:** `model/FaultLocalizator.py`
+
+**Description:** `clean_temporal_files` used `with curr_dir.joinpath('temp') as temp_dir:`
+&mdash; `pathlib.Path` doesn't implement the context manager protocol, so
+calling this method would immediately crash with
+`AttributeError: 'PosixPath' object has no attribute '__enter__'`.
+
+**Finding:** Not reachable in practice: it has no callers anywhere in the
+codebase. It existed to clean up the `temp/` directory from the old
+disk-based candidate-writing workflow, which was already removed
+(`model/HypothesisGenerator.py` no longer writes candidates to disk).
+
+**Fix:** Deleted the method instead of fixing a bug in dead code, along
+with the `pathlib`/`shutil` imports that existed only to support it.
+
+---
+
 ## Compare typed test results instead of their string representations
 
 **Module:** `AbinModel.py` (`parse_csv_data`), `model/core/ModelTester.py` (`model_testing`)
