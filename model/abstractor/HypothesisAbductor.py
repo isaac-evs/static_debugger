@@ -10,7 +10,7 @@ import itertools
 from typing import Dict, Optional, Union, Type, Tuple, List
 from model.abstractor.Bugfix import BugfixMetadata
 from model.abstractor.NodeAbstractor import IDMapping, NodeAbstractor, NodeMapping
-from model.abstractor.NodeMapper import ASTIdentifiers, ASTNode, IDTokens
+from model.abstractor.NodeMapper import ASTIdentifiers, ASTNode, IDTokens, has_identifier_attr
 from model.abstractor.SafeASTLiteral import safe_ast_literal_eval
 from model.abstractor.SymbolTable import SymbolTable, CALLABLE_ROLE, SUBSCRIPTABLE_ROLE, VALUE_ROLE
 
@@ -29,12 +29,12 @@ def infer_template_roles(template: ASTNode) -> Dict[str, str]:
   :type  template: ASTNode
   :rtype: Dict[str, str]
   """
-  ast_identifiers = ['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']
+  ast_identifiers = ['id', 'value', 'name', 'asname', 'module', 'attr', 'arg']
   roles: Dict[str, str] = {}
 
   def visit(node: ASTNode, parent: Optional[ASTNode], field_name: Optional[str]) -> None:
     for ast_id in ast_identifiers:
-      if hasattr(node, ast_id):
+      if has_identifier_attr(node, ast_id):
         label = getattr(node, ast_id)
         if isinstance(label, str) and label not in roles:
           roles[label] = _role_for(node, parent, field_name)
@@ -75,7 +75,7 @@ class HypothesisAbductor(ast.NodeVisitor):
         symbol_table: Optional[SymbolTable] = None) -> None:
     """ Constructor method """
     self.abducted_fix = None
-    self.ast_identifiers = ['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']
+    self.ast_identifiers = ['id', 'value', 'name', 'asname', 'module', 'attr', 'arg']
     self.available_identifiers = self.merge_available_identifiers(
                                           available_identifiers,
                                           bugfix['available_identifiers'])
@@ -114,14 +114,23 @@ class HypothesisAbductor(ast.NodeVisitor):
     :rtype: None
     """
     for ast_id in self.ast_identifiers:
-      if hasattr(node, ast_id):
+      if has_identifier_attr(node, ast_id):
         node_id = getattr(node, ast_id, None)
         node_id = str(node_id)
         if node_id in self.abducted_fix.map_ids:
           abduction = self.abducted_fix.map_ids[node_id]
           node_type = re.sub('\d+$', '', node_id)
-          if node_type == 'Num':
-            if self.is_int(abduction):
+          if node_type in ('Num', 'Constant'):
+            # ast.Num/ast.Str/ast.Bytes/ast.NameConstant were merged into
+            # ast.Constant (Python 3.8+), so a substituted token here may
+            # need to become any of int/float/complex/bool/None, not just
+            # a number -- tokens were stringified when collected, so the
+            # original Python type has to be re-inferred from the string.
+            if abduction == 'None':
+              abduction = None
+            elif abduction in ('True', 'False'):
+              abduction = abduction == 'True'
+            elif self.is_int(abduction):
               abduction = int(abduction)
             elif self.is_float(abduction):
               abduction = float(abduction)

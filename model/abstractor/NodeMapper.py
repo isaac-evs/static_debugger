@@ -13,6 +13,29 @@ IDToken = str
 IDTokens = Dict[str, Set[IDToken]]
 ASTNode = ast.AST
 
+
+def has_identifier_attr(node: ASTNode, ast_id: str) -> bool:
+    """ Whether `ast_id` on `node` holds a plain identifier/literal value
+    that's safe to abstract, as opposed to a child AST node.
+
+    `'value'` needs special-casing: it's the modern home for what used to
+    be `ast.Num.n`/`ast.Str.s` (deprecated since Python 3.8, removed in
+    3.14) on `ast.Constant` nodes, but the *same* attribute name is also
+    used by many other node types (`Attribute.value`, `Subscript.value`,
+    `Return.value`, `Assign.value`, ...) to hold a child expression node,
+    which must never be treated as an abstractable identifier.
+
+    :param node: The AST node being inspected.
+    :type  node: ASTNode
+    :param ast_id: The candidate identifier attribute name.
+    :type  ast_id: str
+    :rtype: bool
+    """
+    if ast_id == 'value':
+        return isinstance(node, ast.Constant)
+    return hasattr(node, ast_id)
+
+
 class NodeMapper(RecursiveVisitor):
     """ This class is used to visit all the nodes in a AST
     and get the available identifiers. """
@@ -22,20 +45,20 @@ class NodeMapper(RecursiveVisitor):
     def __init__(self, ast_node: ASTNode, prepare_node: bool = False) -> None:
       """ Constructor Method """
       super().__init__()
-      self.ast_identifiers: ASTIdentifiers = ['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']
+      self.ast_identifiers: ASTIdentifiers = ['id', 'value', 'name', 'asname', 'module', 'attr', 'arg']
       self.id_tokens = {}
       if prepare_node:
         self.visit(self.prepare_node(ast_node))
       else:
         self.visit(ast_node)
-    
+
     @RecursiveVisitor.recursive
     def generic_visit(self, node: ASTNode) -> None:
         """ Method to visit all the nodes.
 
         If the visited node has an identifier,
         it will be mapped to the self.id_tokens variable.
-        
+
         :param node: The visited node
         :type  node: ASTNode
         :rtype: None
@@ -43,7 +66,7 @@ class NodeMapper(RecursiveVisitor):
         node_name: str
         node_id: Union[Any, None]
         for ast_id in self.ast_identifiers:
-          if hasattr(node, ast_id):
+          if has_identifier_attr(node, ast_id):
             node_name = node.__class__.__name__
             node_id = getattr(node, ast_id, None)
             node_id = str(node_id)

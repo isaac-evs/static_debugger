@@ -8,7 +8,7 @@ import ast
 import hashlib
 from typing import List, Union, Tuple, Type, Dict
 from typing_extensions import TypedDict
-from model.abstractor.NodeMapper import ASTIdentifiers, ASTNode, NodeMapper
+from model.abstractor.NodeMapper import ASTIdentifiers, ASTNode, NodeMapper, has_identifier_attr
 
 UserIdentifier = str
 NodeAbstraction = str
@@ -36,7 +36,7 @@ class NodeAbstractor(NodeMapper):
     def __init__(self, node_to_abstract: ASTNode, 
                  nodes_mapping: Union[Tuple[IDMapping, NodeMapping], None] = None) -> None:
       """Constructor Method"""
-      self.ast_identifiers = ['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']
+      self.ast_identifiers = ['id', 'value', 'name', 'asname', 'module', 'attr', 'arg']
       self.ast_node = self.prepare_node(node_to_abstract)
       self.adj_lst = {}
       if nodes_mapping == None:
@@ -84,7 +84,7 @@ class NodeAbstractor(NodeMapper):
       node_name = type(node).__name__
       abstraction = node_name
       for ast_id in self.ast_identifiers:
-        if hasattr(node, ast_id):
+        if has_identifier_attr(node, ast_id):
           node_id = getattr(node, ast_id, None)
           node_id = str(node_id)
           if node_id not in self.map_ids:

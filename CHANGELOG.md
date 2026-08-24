@@ -3,6 +3,49 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix constant abstraction corrupted by deprecated ast.Num/ast.Str shims
+
+**Module:** `model/abstractor/NodeMapper.py`, `NodeAbstractor.py`, `HypothesisAbductor.py`
+
+**Description:** The identifier-attribute list used for abstraction was
+hardcoded as `['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']`.
+`ast.Num`/`ast.Str` (`.n`/`.s`) were deprecated in favor of `ast.Constant`
+(`.value`) back in Python 3.8, but kept as compatibility shims that proxy
+straight to `.value` &mdash; on Python 3.12 those shims make `hasattr(node, 'n')`
+*and* `hasattr(node, 's')` both `True` for every `Constant` node.
+
+**Impact:** Worse than "ignored": every numeric/string/bool/None constant
+got abstracted *twice*. The first pass correctly mapped it to a label; the
+second pass read that label back through the *other* shim (since both
+proxy to the same `.value`), treated it as a brand new token, and
+overwrote it with a second, wrong label &mdash; corrupting the identifier
+mapping and the resulting pattern hexdigest for every constant. Verified
+directly: abstracting the literal `42` produced `map_ids={'42':
+'Constant0', 'Constant0': 'Constant1'}` and left `node.value` as the
+string `'Constant1'` instead of a usable label for `42`.
+
+**Fix:** Replaced `'n'`/`'s'` with `'value'` in all four occurrences of the
+identifier list, guarded by a new `has_identifier_attr()` helper that only
+treats `'value'` as an identifier on `ast.Constant` nodes specifically
+(`.value` is also a plain child-node field on `Attribute`, `Subscript`,
+`Return`, `Assign`, etc., which must never be abstracted the same way).
+Also fixed the companion type-coercion logic in
+`HypothesisAbductor.abduct_node`, which used to special-case node types
+named `'Num'`/`'Bytes'` to restore a substituted string back to a real
+int/float/complex/bytes &mdash; those never fire for a unified `Constant`
+label, so also added explicit `None`/`bool` handling.
+
+**Verified:** Abstracting `42`/`3.14`/`'hello'`/`True`/`None` each now
+produces exactly one clean label with no corruption. A full abduction
+round-trip (`return 1` &rarr; `return 99`-style fix pattern, offering
+candidate tokens `1`/`42`/`100`) produces real integer literals
+(`return 42`) rather than quoted strings (`return '42'`). Confirmed the
+pre-fix code reproduces the exact corruption described above. Full
+`Middle.py`/`HappyNumber.py` benchmarks unaffected (neither exercises
+constant abstraction).
+
+---
+
 ## Remove unused inspect.getsource()-based code
 
 **Module:** `model/core/AbinDebugger.py`, `model/debugger/StatisticalDebugger.py`
