@@ -139,6 +139,14 @@ class AbinModel():
             return SearchResult(model_src_code, behavior, prev_observation, [], None, None, depth)
         # We need to save the prev_observation in case of failed refinement
         prev_observation_holder = prev_observation[:]
+        # Fixed once per localizator/model: every sibling hypothesis tried
+        # below is compared against THIS SAME baseline. Without it, a
+        # nested recursive dive triggered by one hypothesis (which
+        # reassigns `prev_observation` to whatever it returned) would
+        # silently become the comparison point for the *next* sibling
+        # hypothesis, comparing it against an unrelated candidate instead
+        # of the actual baseline.
+        baseline_observation = prev_observation[:]
         imprv_candidates = []
         winning_hypothesis = None
         winning_candidate = None
@@ -155,7 +163,7 @@ class AbinModel():
                         """
                     )
                     self.abduction_breadth += 1
-                    evaluation = self.evaluation_engine.evaluate(prev_observation, model_src_code[:], Candidate(hypothesis))
+                    evaluation = self.evaluation_engine.evaluate(baseline_observation[:], model_src_code[:], Candidate(hypothesis))
                     (new_model_src_code, behavior, new_observation, hypothesis) = evaluation
                     AbinLogging.debugging_logger.info(f"""
                         New Observations:
@@ -223,6 +231,9 @@ class AbinModel():
                 with localizator:
                     (prev_observation, influence_path) = localizator.model_testing(check_consistency=False)
                     model_src_code = localizator.model_src
+                # A new localizator/starting point means a genuinely new
+                # baseline to compare its own sibling hypotheses against.
+                baseline_observation = prev_observation[:]
             else:
                 break
 

@@ -3,6 +3,39 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Pin candidate comparisons to a stable baseline instead of a drifting one
+
+**Module:** `AbinModel.py` (`_search`)
+
+**Description:** Candidate hypotheses are evaluated by comparing their test
+observations against a baseline (`prev_observation`). Inside the sibling
+hypothesis loop, that same variable was also being reassigned to whatever a
+nested recursive dive (triggered by an earlier sibling's `Improvement`)
+happened to return.
+
+**Impact:** A sibling hypothesis tried *after* another one triggered a
+recursive dive was compared against that unrelated deeper candidate's
+leftover observation instead of the actual baseline, instead of the
+original unpatched program's behavior &mdash; corrupting `Behavior`
+classification (Improvement/Same/Worsened) for every subsequent sibling at
+that search depth and making sequential runs non-deterministic.
+
+**Fix:** Introduced `baseline_observation`, captured once per
+localizator/model and left untouched by recursive calls; every hypothesis
+evaluated against the *same* set of siblings now uses it. `prev_observation`
+still tracks the current best result for return-value/refinement bookkeeping,
+but is no longer conflated with the comparison baseline. The baseline is
+only refreshed when a genuinely new starting point is drawn (a refinement
+retry re-runs `model_testing()` on a different improvement candidate).
+
+**Verified:** A targeted reproduction (two sibling hypotheses where the
+first triggers a recursive dive returning a different observation shape)
+confirmed the second sibling was compared against the dive's leftover
+result pre-fix, and against the correct original baseline post-fix. Full
+`Middle.py` benchmark (all three schemas) unaffected.
+
+---
+
 ## Fix dangling SIGALRM leaking across sequential test runs
 
 **Module:** `model/core/ModelTester.py` (`model_testing`), `model/core/AbinDebugger.py` (`__exit__`)
