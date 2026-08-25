@@ -3,6 +3,40 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Add a minimal Flask frontend mirroring `cli.py`
+
+**Module:** `frontend/app.py`, `frontend/templates/*.html` (new), `requirements.txt`
+
+**Description:** Added a single-file Flask app (`frontend/app.py`) that
+exposes `cli.py`'s functionality (model/tests/func, complexity, schema,
+`--generate-ai-tests`/`--ai-model`) as an HTML form instead of CLI flags.
+It imports `cli` directly to reuse its `load_settings()` config wiring,
+and calls the same `AbinModel`/`parse_csv_data`/
+`generate_injectable_test_cases` functions the CLI uses &mdash; no
+duplicated debugging logic. Flask over FastAPI/PyQt: the repair loop is
+CPU-bound and blocking regardless of async support, so async buys
+nothing here, and a browser form needs far less code than a desktop GUI
+toolkit. The request blocks until the run finishes (spinner/wait, no
+streaming) &mdash; acceptable for a single-user local tool.
+
+**Impact:** N/A (new capability, additive only).
+
+**Fix:** N/A (new feature). Wrapped `abin.start_auto_debugging()` and
+CSV loading in try/except so a bad file path, missing function, or any
+other runtime failure renders a clean error message instead of a raw
+Flask debug traceback.
+
+**Verified:** Ran the server (`python3 frontend/app.py`) and drove it
+with `curl` end-to-end: the golden-path repair on `benchmarks/Middle.py`
+(`middle1`) produces the identical fix `cli.py` produces; `--generate-ai-tests`
+equivalent (`generate_ai_tests=2`) generates and injects real AI test
+cases live (suite grows 7&rarr;9) and still repairs successfully; a
+nonexistent model path, a nonexistent tests CSV, and a nonexistent
+function name each render a clean error page (200) instead of an
+unhandled 500/traceback.
+
+---
+
 ## Fix `ANTHROPIC_API_KEY` from `.env` being ignored, add `.env.example`
 
 **Module:** `model/misc/generate_test_cases.py`, `.env.example` (new)

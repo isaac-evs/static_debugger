@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AbinDebugger</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.4rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input, select { width: 100%; padding: 0.4rem; margin-top: 0.25rem; box-sizing: border-box; }
+    .hint { color: #666; font-size: 0.85rem; margin-top: 0.15rem; }
+    .row { display: flex; gap: 1rem; }
+    .row > div { flex: 1; }
+    button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+    fieldset { margin-top: 1.5rem; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>AbinDebugger</h1>
+  <p class="hint">Paths are resolved relative to where <code>frontend/app.py</code> was started (the project root).</p>
+  <form action="/run" method="post">
+    <label for="model">Model (.py file with the defective function)</label>
+    <input id="model" name="model" placeholder="benchmarks/Middle.py" required>
+
+    <label for="tests">Tests (.csv file)</label>
+    <input id="tests" name="tests" placeholder="benchmarks/Middle.csv" required>
+
+    <label for="func">Function name</label>
+    <input id="func" name="func" placeholder="middle1" required>
+
+    <div class="row">
+      <div>
+        <label for="complexity">Max complexity</label>
+        <input id="complexity" name="complexity" type="number" value="3" min="1">
+      </div>
+      <div>
+        <label for="schema">Search schema</label>
+        <select id="schema" name="schema">
+          <option value="DFS">DFS</option>
+          <option value="BFS">BFS</option>
+          <option value="A_STAR">A_STAR</option>
+        </select>
+      </div>
+    </div>
+
+    <fieldset>
+      <legend>AI-generated test cases (optional)</legend>
+      <label for="generate_ai_tests">Number of AI test cases to generate</label>
+      <input id="generate_ai_tests" name="generate_ai_tests" type="number" value="0" min="0">
+      <p class="hint">Requires ANTHROPIC_API_KEY in .env. Leave at 0 to skip.</p>
+
+      <label for="ai_model">Claude model</label>
+      <input id="ai_model" name="ai_model" value="{{ ai_model_default }}">
+    </fieldset>
+
+    <button type="submit">Run debugger</button>
+  </form>
+</body>
+</html>
