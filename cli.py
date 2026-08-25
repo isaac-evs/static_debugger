@@ -63,6 +63,17 @@ def main():
        choices=["DFS", "BFS", "A_STAR"],
        help="Search strategy",
    )
+   parser.add_argument(
+       "--generate-ai-tests", type=int, default=0, metavar="N",
+       help="Generate N additional AI-authored test cases via the Claude API "
+            "(requires ANTHROPIC_API_KEY in .env) and inject them into the "
+            "test suite before debugging",
+   )
+   parser.add_argument(
+       "--ai-model", type=str, default=None,
+       help="Claude model to use for --generate-ai-tests "
+            "(default: model.misc.generate_test_cases.DEFAULT_MODEL)",
+   )
 
    args = parser.parse_args()
 
@@ -113,7 +124,7 @@ def main():
    # Load and parse tests
    print(f"Loading test suite from {args.tests}...")
    df = pd.read_csv(args.tests, keep_default_na=False)
-   test_cases, _ = parse_csv_data(df)
+   test_cases, parsed_types = parse_csv_data(df)
 
    # Map schema enum
    schema_map = {
@@ -134,6 +145,28 @@ def main():
        max_complexity=args.complexity,
        abduction_schema=schema_map[args.schema],
    )
+
+   if args.generate_ai_tests > 0:
+       from model.misc.generate_test_cases import generate_injectable_test_cases, DEFAULT_MODEL
+
+       param_types = dict(zip(parsed_types['input_args'], parsed_types['type']))
+       print(f"Generating {args.generate_ai_tests} AI-authored test case(s) "
+             f"via {args.ai_model or DEFAULT_MODEL}...")
+       try:
+           ai_tests = generate_injectable_test_cases(
+               source_path=args.model,
+               function_name=args.func,
+               param_types=param_types,
+               num_cases=args.generate_ai_tests,
+               model=args.ai_model or DEFAULT_MODEL,
+           )
+       except Exception as e:
+           print(f"Error: AI test generation failed ({e}). "
+                 "Check ANTHROPIC_API_KEY in .env. Continuing without AI-generated tests.")
+       else:
+           abin.inject_tests(ai_tests)
+           print(f"Injected {len(ai_tests)} AI-generated test case(s). "
+                 f"Test suite size: {len(abin.test_suite)}\n")
 
    repaired_code, behavior, prev_observation, new_observation = (
        abin.start_auto_debugging()

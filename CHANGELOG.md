@@ -3,6 +3,38 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Wire AI test generation and `inject_tests()` into `cli.py`
+
+**Module:** `cli.py`
+
+**Description:** `generate_injectable_test_cases()` and
+`AbinModel.inject_tests()` were only reachable by writing Python &mdash;
+the headless CLI had no way to trigger either. Added `--generate-ai-tests
+N` (and `--ai-model`) to `cli.py`: after loading the CSV test suite and
+constructing the `AbinModel`, it generates `N` AI-authored test cases
+(reusing `parsed_types` already produced by `parse_csv_data` for the
+parameter-type map, so no extra flag is needed for types) and injects
+them before `start_auto_debugging()` runs.
+
+**Impact:** Without this, the AI test generator and `inject_tests()`
+were dead ends from the CLI's perspective &mdash; usable only via a
+one-off Python script.
+
+**Fix:** Generation failures (e.g. missing `ANTHROPIC_API_KEY`) are
+caught and reported as a clean CLI message; debugging continues with
+the original test suite instead of crashing.
+
+**Verified:** `cli.py --model benchmarks/Middle.py --tests
+benchmarks/Middle.csv --func middle1 --generate-ai-tests 3` builds the
+param-type map correctly, calls `generate_injectable_test_cases()`
+correctly, fails cleanly (no traceback) on the intentionally-blank
+`ANTHROPIC_API_KEY`, and the repair loop still completes successfully
+on the original suite. Plain `cli.py` invocation (no `--generate-ai-tests`)
+re-verified unaffected; also re-ran `PasswordStrength.py` and
+`HappyNumber.py` benchmarks end-to-end with no crashes.
+
+---
+
 ## Add AI-generated test case tooling and an `inject_tests()` lifecycle hook
 
 **Module:** `AbinModel.py`, `model/misc/generate_test_cases.py` (new)
