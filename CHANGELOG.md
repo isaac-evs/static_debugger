@@ -3,6 +3,43 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix frontend paths breaking when launched from outside the project root
+
+**Module:** `frontend/app.py`, `frontend/templates/index.html`
+
+**Description:** The frontend resolved form paths (and, transitively,
+`config.py`'s `SQLITE_DB_PATH`) against the process's working directory.
+Starting the server from inside `frontend/` (a natural thing to try,
+since `app.py` lives there) silently broke both: the model path failed
+to compile (surfacing as an opaque `'NoneType' object is not
+subscriptable` from deep in `AbinModel._search`), and even when paths
+happened to resolve, a wrong-directory `SQLITE_DB_PATH` starved the
+hypothesis search of learned patterns, degrading a real repair into
+"UNABLE TO REPAIR" with no error at all. Separately, the form's default
+values were only `placeholder` hints (never actually submitted), so an
+untouched form silently posted empty strings.
+
+**Impact:** The exact repro a user hit: start the server, submit the
+form with its shown defaults untouched, get `Debugging run failed:
+'NoneType' object is not subscriptable`.
+
+**Fix:** `app.py` now `chdir`s to the project root at import time
+(`use_reloader=False` is required alongside it, since Werkzeug's
+debug-mode reloader re-execs using a relative script path that breaks
+once cwd has moved) and additionally resolves form paths against the
+project root explicitly via a `resolve_path()` helper, so absolute
+paths and any future cwd assumptions elsewhere in the codebase are
+both covered. `index.html`'s model/tests/func inputs now use real
+`value=` defaults instead of `placeholder=`.
+
+**Verified:** Started the server both from the project root and from
+inside `frontend/`; both now produce the same successful repair on
+`benchmarks/Middle.py`/`middle1`, both correctly degrade to a clean
+error page for a nonexistent model path, and `--generate-ai-tests`
+still works live from either directory.
+
+---
+
 ## Add a minimal Flask frontend mirroring `cli.py`
 
 **Module:** `frontend/app.py`, `frontend/templates/*.html` (new), `requirements.txt`

@@ -17,16 +17,16 @@
 </head>
 <body>
   <h1>AbinDebugger</h1>
-  <p class="hint">Paths are resolved relative to where <code>frontend/app.py</code> was started (the project root).</p>
+  <p class="hint">Relative paths (e.g. <code>benchmarks/Middle.py</code>) are resolved against the project root, regardless of where the server was started from.</p>
   <form action="/run" method="post">
     <label for="model">Model (.py file with the defective function)</label>
-    <input id="model" name="model" placeholder="benchmarks/Middle.py" required>
+    <input id="model" name="model" value="benchmarks/Middle.py" required>
 
     <label for="tests">Tests (.csv file)</label>
-    <input id="tests" name="tests" placeholder="benchmarks/Middle.csv" required>
+    <input id="tests" name="tests" value="benchmarks/Middle.csv" required>
 
     <label for="func">Function name</label>
-    <input id="func" name="func" placeholder="middle1" required>
+    <input id="func" name="func" value="middle1" required>
 
     <div class="row">
       <div>

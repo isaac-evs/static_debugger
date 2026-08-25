@@ -7,15 +7,26 @@ AbinModel / generate_injectable_test_cases calls the CLI uses. Blocking
 request/response -- no streaming, no background jobs -- since the repair
 loop is CPU-bound and this is a single-user local tool.
 
-Run from the project root (paths in the form are resolved relative to
-the process's working directory, same as cli.py):
+Can be started from anywhere -- it chdirs to the project root itself,
+so form paths and config.py's relative paths (e.g. SQLITE_DB_PATH)
+resolve consistently either way:
 
     python3 frontend/app.py
+    # or
+    cd frontend && python3 app.py
 """
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+os.chdir(PROJECT_ROOT)  # config.py's relative paths (e.g. SQLITE_DB_PATH)
+                         # and cli.py's convention both assume cwd == project
+                         # root; enforce that regardless of where this was
+                         # launched from. (Requires use_reloader=False below --
+                         # Werkzeug's reloader re-execs using a relative script
+                         # path that breaks once cwd has moved.)
 
 import pandas as pd
 from flask import Flask, render_template, request
@@ -34,6 +45,16 @@ SCHEMA_MAP = {
 }
 
 
+def resolve_path(raw: str) -> str:
+    """ Resolves a form path against the project root, not the process's
+    cwd -- so "benchmarks/Middle.py" works the same whether the server
+    was started from the project root or from inside frontend/.
+    :rtype: str
+    """
+    path = Path(raw)
+    return str(path if path.is_absolute() else PROJECT_ROOT / path)
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html", ai_model_default=DEFAULT_MODEL)
@@ -41,8 +62,8 @@ def index():
 
 @app.route("/run", methods=["POST"])
 def run():
-    model_path = request.form["model"]
-    tests_path = request.form["tests"]
+    model_path = resolve_path(request.form["model"])
+    tests_path = resolve_path(request.form["tests"])
     func_name = request.form["func"]
     complexity = int(request.form.get("complexity") or 3)
     schema = request.form.get("schema", "DFS")
@@ -110,4 +131,4 @@ def run():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, use_reloader=False)
