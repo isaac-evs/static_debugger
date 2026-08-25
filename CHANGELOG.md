@@ -3,6 +3,47 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Add AI-generated test case tooling and an `inject_tests()` lifecycle hook
+
+**Module:** `AbinModel.py`, `model/misc/generate_test_cases.py` (new)
+
+**Description:** Added a standalone module that calls the Claude API to
+generate CSV test suites for a target function, using SDET methodology
+(equivalence partitioning, boundary value analysis, MC/DC condition
+coverage). `expected_output` is derived from what the function's name,
+signature, and docstring say it *should* do, not by executing the
+(possibly buggy) implementation, so bugs in the current code don't get
+baked into the "expected" values. Added `AbinModel.inject_tests(new_tests)`
+so a caller can append additional test cases (e.g. AI-generated ones,
+via the new `generate_injectable_test_cases()`) after constructing an
+`AbinModel` and before calling `start_auto_debugging()`.
+
+**Impact:** Previously test ingestion was a one-time static load from a
+single CSV at construction time, with no supported way to extend a
+suite afterward. A broader subprocess/JSON "plugin hub" architecture was
+considered and rejected as premature (no third-party plugin authors
+exist yet, and it would add subprocess lifecycle, schema-versioning, and
+cross-process debugging overhead) in favor of this minimal, low-risk
+seam.
+
+**Fix:** `inject_tests()` validates that the injected DataFrame has the
+same (already-parsed) columns as `self.test_suite` &mdash; bare
+parameter-name columns holding typed Python values, the shape
+`AbinModel.parse_csv_data()` produces, not raw CSV cell text &mdash; then
+concatenates and updates both `self.test_suite` and
+`self.evaluation_engine.test_suite` (the latter holds its own separate
+reference captured at construction time, so both must be kept in sync).
+
+**Verified:** Constructed a real `AbinModel` against
+`benchmarks/Middle.py`/`Middle.csv`, injected a synthetic test case, and
+confirmed both `self.test_suite` and `self.evaluation_engine.test_suite`
+reflect the appended row; confirmed a column-mismatch injection raises
+`ValueError`. Confirmed `build_injectable_dataframe()`'s output column
+shape matches `AbinModel.parse_csv_data()`'s real output for
+`benchmarks/Middle.csv`.
+
+---
+
 ## Fix "Hyphotesis" typo project-wide
 
 **Module:** `AbinModel.py`, `model/HyphotesisTester.py` &rarr; `model/HypothesisTester.py`, `model/HypothesisRefinement.py`, `model/EvaluationEngine.py`

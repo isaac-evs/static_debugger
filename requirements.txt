@@ -1,3 +1,4 @@
+anthropic>=0.69.0
 astunparse==1.6.3
 certifi==2021.10.8
 charset-normalizer==2.0.12
@@ -16,6 +17,7 @@ packaging==21.3
 pandas>=1.3.5
 Pebble==4.6.3
 Pillow>=10.0
+pydantic>=2.0
 PyDriller==2.1
 pyparsing==3.0.7
 

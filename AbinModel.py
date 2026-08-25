@@ -82,6 +82,41 @@ class AbinModel():
         self.hypotheses_generator = generator
         self.evaluation_engine = EvaluationEngine(function_name, test_suite, tester)
 
+    def inject_tests(self, new_tests: pd.DataFrame) -> None:
+        """ Appends additional test cases to the suite before the repair
+        loop starts (e.g. AI-generated cases from
+        model.misc.generate_test_cases.generate_injectable_test_cases).
+
+        Call this after construction and before start_auto_debugging():
+        fault localization and every candidate evaluation read
+        self.test_suite / self.evaluation_engine.test_suite fresh on
+        each pass, so anything injected here is picked up starting with
+        the very first localization pass.
+
+        `new_tests` must already be in the *parsed* shape self.test_suite
+        is in -- bare parameter-name columns holding real typed Python
+        values (what AbinModel.parse_csv_data() itself produces), not
+        the raw "name: type" CSV-cell-text shape a .csv file uses.
+
+        :param new_tests: Additional test cases, same columns as the
+            test suite passed to __init__.
+        :type  new_tests: pd.DataFrame
+        :rtype: None
+        """
+        if set(new_tests.columns) != set(self.test_suite.columns):
+            raise ValueError(
+                "inject_tests: column mismatch between injected tests "
+                f"{list(new_tests.columns)} and the existing test suite "
+                f"{list(self.test_suite.columns)}. Injected tests must use "
+                "the same (already-parsed) columns as the existing suite."
+            )
+        combined = pd.concat(
+            [self.test_suite, new_tests[self.test_suite.columns]],
+            ignore_index=True,
+        )
+        self.test_suite = combined
+        self.evaluation_engine.test_suite = combined
+
     def start_auto_debugging(self, model_src_code = None,
         improvement_candidates_set = None) -> Tuple[str, Behavior, Observation, Observation]:
         """ This method encapsulates the whole debugging process.
