@@ -23,7 +23,7 @@ from typing import Dict, List, Tuple
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-load_dotenv()
+load_dotenv(override=True)  # .env's ANTHROPIC_API_KEY wins over a blank/stale shell var
 
 import anthropic
 import pandas as pd

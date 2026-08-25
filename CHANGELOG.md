@@ -3,6 +3,34 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix `ANTHROPIC_API_KEY` from `.env` being ignored, add `.env.example`
+
+**Module:** `model/misc/generate_test_cases.py`, `.env.example` (new)
+
+**Description:** `load_dotenv()` doesn't override variables that already
+exist in the process environment. Several tools (e.g. Claude Code
+itself) export `ANTHROPIC_API_KEY` as an empty string into the shell,
+so even after setting a real key in `.env`, `generate_test_cases.py`
+kept picking up the blank shell value and failing authentication.
+
+**Impact:** `--generate-ai-tests` / `generate_test_cases.py` silently
+failed to authenticate for anyone with `ANTHROPIC_API_KEY` already
+(even blankly) set in their shell &mdash; the `.env` key appeared to be
+"not seen."
+
+**Fix:** Changed `load_dotenv()` to `load_dotenv(override=True)` so
+`.env` always wins for this module. Added `.env.example` documenting
+the expected variables.
+
+**Verified:** `python3 cli.py --model benchmarks/Middle.py --tests
+benchmarks/Middle.csv --func middle1 --generate-ai-tests 3` now
+generates and injects 3 real AI-authored test cases (suite grows
+7&rarr;10) and completes a successful repair, using a real
+`ANTHROPIC_API_KEY` in `.env` despite a blank `ANTHROPIC_API_KEY` also
+being present in the shell environment.
+
+---
+
 ## Wire AI test generation and `inject_tests()` into `cli.py`
 
 **Module:** `cli.py`
