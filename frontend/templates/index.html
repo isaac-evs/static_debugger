@@ -4,56 +4,174 @@
   <meta charset="utf-8">
   <title>AbinDebugger</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-    h1 { font-size: 1.4rem; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; color: #222; margin: 0; padding: 1.5rem; }
+    h1 { font-size: 1.4rem; margin-top: 0; }
+    .layout { display: flex; gap: 1.5rem; align-items: flex-start; max-width: 1200px; margin: 0 auto; }
+    .panel { flex: 1; min-width: 0; }
     label { display: block; margin-top: 1rem; font-weight: 600; }
     input, select { width: 100%; padding: 0.4rem; margin-top: 0.25rem; box-sizing: border-box; }
     .hint { color: #666; font-size: 0.85rem; margin-top: 0.15rem; }
     .row { display: flex; gap: 1rem; }
     .row > div { flex: 1; }
     button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
     fieldset { margin-top: 1.5rem; border: 1px solid #ddd; }
+
+    .terminal {
+      background: #0d1117; color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem; border-radius: 6px; padding: 1rem; height: 520px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .terminal .placeholder { color: #6e7681; }
+    .terminal .err { color: #ff7b72; }
+    .terminal .result-success { color: #3fb950; font-weight: bold; }
+    .terminal .result-failed { color: #ff7b72; font-weight: bold; }
+    .terminal .result-valid { color: #58a6ff; font-weight: bold; }
+    .terminal .code-block { color: #c9d1d9; background: #161b22; display: block; padding: 0.75rem;
+      margin-top: 0.4rem; border-radius: 4px; }
   </style>
 </head>
 <body>
   <h1>AbinDebugger</h1>
-  <p class="hint">Relative paths (e.g. <code>benchmarks/Middle.py</code>) are resolved against the project root, regardless of where the server was started from.</p>
-  <form action="/run" method="post">
-    <label for="model">Model (.py file with the defective function)</label>
-    <input id="model" name="model" value="benchmarks/Middle.py" required>
-
-    <label for="tests">Tests (.csv file)</label>
-    <input id="tests" name="tests" value="benchmarks/Middle.csv" required>
-
-    <label for="func">Function name</label>
-    <input id="func" name="func" value="middle1" required>
-
-    <div class="row">
-      <div>
-        <label for="complexity">Max complexity</label>
-        <input id="complexity" name="complexity" type="number" value="3" min="1">
-      </div>
-      <div>
-        <label for="schema">Search schema</label>
-        <select id="schema" name="schema">
-          <option value="DFS">DFS</option>
-          <option value="BFS">BFS</option>
-          <option value="A_STAR">A_STAR</option>
+  <div class="layout">
+    <div class="panel">
+      <form id="run-form">
+        <label for="model">Model</label>
+        <select id="model" name="model" required>
+          {% for m in models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
         </select>
-      </div>
+
+        <label for="tests">Tests</label>
+        <select id="tests" name="tests" required>
+          {% for t in tests %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+        </select>
+        {% if not models or not tests %}
+          <p class="hint">No .py/.csv files auto-detected under benchmarks/.</p>
+        {% endif %}
+
+        <label for="func">Function</label>
+        <select id="func" name="func" required></select>
+
+        <div class="row">
+          <div>
+            <label for="complexity">Max complexity</label>
+            <input id="complexity" name="complexity" type="number" value="3" min="1">
+          </div>
+          <div>
+            <label for="schema">Search schema</label>
+            <select id="schema" name="schema">
+              <option value="DFS">DFS</option>
+              <option value="BFS">BFS</option>
+              <option value="A_STAR">A_STAR</option>
+            </select>
+          </div>
+        </div>
+
+        <fieldset>
+          <legend>AI-generated test cases (optional)</legend>
+          <label for="generate_ai_tests">Number of AI test cases to generate</label>
+          <input id="generate_ai_tests" name="generate_ai_tests" type="number" value="0" min="0">
+
+          <label for="ai_model">Claude model</label>
+          <input id="ai_model" name="ai_model" value="{{ ai_model_default }}">
+
+          <label for="api_key">Anthropic API key</label>
+          <input id="api_key" name="api_key" type="password" autocomplete="off"
+                 placeholder="Leave blank to use ANTHROPIC_API_KEY from .env">
+          <p class="hint">Only sent for this run, never written to disk or logged server-side.</p>
+        </fieldset>
+
+        <button id="run-btn" type="submit">Run debugger</button>
+      </form>
     </div>
 
-    <fieldset>
-      <legend>AI-generated test cases (optional)</legend>
-      <label for="generate_ai_tests">Number of AI test cases to generate</label>
-      <input id="generate_ai_tests" name="generate_ai_tests" type="number" value="0" min="0">
-      <p class="hint">Requires ANTHROPIC_API_KEY in .env. Leave at 0 to skip.</p>
+    <div class="panel">
+      <label>Live output</label>
+      <div id="terminal" class="terminal"><span class="placeholder">Run the debugger to see live output here.</span></div>
+    </div>
+  </div>
 
-      <label for="ai_model">Claude model</label>
-      <input id="ai_model" name="ai_model" value="{{ ai_model_default }}">
-    </fieldset>
+  <script>
+    const modelSelect = document.getElementById('model');
+    const funcSelect = document.getElementById('func');
+    const form = document.getElementById('run-form');
+    const runBtn = document.getElementById('run-btn');
+    const terminal = document.getElementById('terminal');
 
-    <button type="submit">Run debugger</button>
-  </form>
+    async function refreshFunctions() {
+      funcSelect.innerHTML = '';
+      if (!modelSelect.value) return;
+      const res = await fetch('/functions?model=' + encodeURIComponent(modelSelect.value));
+      const data = await res.json();
+      (data.functions || []).forEach(fn => {
+        const opt = document.createElement('option');
+        opt.value = fn;
+        opt.textContent = fn;
+        funcSelect.appendChild(opt);
+      });
+    }
+    modelSelect.addEventListener('change', refreshFunctions);
+    if (modelSelect.value) refreshFunctions();
+
+    function appendLine(text, cls) {
+      const line = document.createElement('div');
+      if (cls) line.className = cls;
+      line.textContent = text;
+      terminal.appendChild(line);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function appendResult(result) {
+      const cls = 'result-' + result.status;
+      appendLine(result.message, cls);
+      if (result.code) {
+        const pre = document.createElement('pre');
+        pre.className = 'code-block';
+        pre.textContent = result.code;
+        terminal.appendChild(pre);
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      terminal.innerHTML = '';
+      runBtn.disabled = true;
+      runBtn.textContent = 'Running...';
+
+      try {
+        const res = await fetch('/run', { method: 'POST', body: new FormData(form) });
+        const { run_id } = await res.json();
+        const source = new EventSource('/stream/' + run_id);
+
+        source.onmessage = (event) => {
+          const text = event.data;
+          if (text.startsWith('RESULT::')) {
+            appendResult(JSON.parse(text.slice(8)));
+          } else if (text.startsWith('[error]')) {
+            appendLine(text, 'err');
+          } else {
+            appendLine(text);
+          }
+        };
+        source.addEventListener('done', () => {
+          source.close();
+          runBtn.disabled = false;
+          runBtn.textContent = 'Run debugger';
+        });
+        source.onerror = () => {
+          appendLine('[error] Connection to server lost.', 'err');
+          source.close();
+          runBtn.disabled = false;
+          runBtn.textContent = 'Run debugger';
+        };
+      } catch (err) {
+        appendLine('[error] ' + err, 'err');
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run debugger';
+      }
+    });
+  </script>
 </body>
 </html>

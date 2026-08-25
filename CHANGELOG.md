@@ -3,6 +3,57 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Frontend: auto-detected inputs, in-page API key, live streaming terminal
+
+**Module:** `frontend/app.py`, `frontend/templates/index.html`, `model/misc/generate_test_cases.py`
+
+**Description:** Three usability changes to the frontend:
+1. The free-text model/tests path fields are now `<select>` dropdowns
+   auto-populated from `benchmarks/*.py`/`*.csv`, and the function field
+   is auto-populated (via a new `/functions?model=...` endpoint that
+   parses top-level `def`s with `ast`) from whichever model is selected.
+2. Added an in-page Anthropic API key field (`type="password"`). It's
+   sent only in that run's POST body, used to construct the Anthropic
+   client for that call alone (`generate_test_cases.py`'s
+   `_generate_suite`/`generate_injectable_test_cases`/`generate_test_cases`
+   now take an optional `api_key` override), and is never written to
+   disk, `.env`, or logged &mdash; falls back to `.env`'s
+   `ANTHROPIC_API_KEY` when left blank.
+3. Replaced the separate results page with a live terminal panel: `/run`
+   now starts the debugging session on a background thread and returns
+   a `run_id` immediately; `/stream/<run_id>` is a Server-Sent-Events
+   endpoint that forwards `AbinLogging.debugging_logger`'s records (via
+   a thread-filtered logging handler, so concurrent runs/tabs don't
+   cross-talk) plus the final result to the browser in real time.
+
+**Impact:** Running the actual repair on a background thread (needed so
+the request/response cycle stays free for the SSE connection) means
+`AbinModel`'s signal-based per-test timeout (`signal.setitimer`) no
+longer reliably protects this UI: confirmed empirically that a
+SIGALRM armed from a worker thread still fires, but on the *main*
+thread, not the worker actually running the candidate. A genuinely
+infinite-looping candidate can therefore hang a web UI run
+indefinitely with no recovery short of restarting the server. `cli.py`
+is unaffected (single-threaded, main-thread execution) and remains the
+safe choice for untrusted/adversarial candidates.
+
+**Fix:** N/A (new capability). Documented the timeout caveat directly
+in `frontend/app.py`'s module docstring.
+
+**Verified:** Loaded `/`, confirmed both dropdowns list every
+`benchmarks/*.py`/`*.csv` file; `/functions?model=benchmarks/Middle.py`
+returns `["middle1", "middle2"]`; drove `/run` + `/stream/<run_id>` via
+curl end-to-end and got the full real-time hypothesis-by-hypothesis
+search trace culminating in the same successful repair as `cli.py`.
+Blanked `.env`'s `ANTHROPIC_API_KEY` and confirmed AI test generation
+still succeeds when the key is supplied only via the in-page field
+(and that `.env` itself is untouched afterward). Confirmed a
+nonexistent model path now surfaces the real underlying error
+("Unable to open the file...") in the stream before the final clean
+error line, and produces no stray files.
+
+---
+
 ## Fix frontend paths breaking when launched from outside the project root
 
 **Module:** `frontend/app.py`, `frontend/templates/index.html`

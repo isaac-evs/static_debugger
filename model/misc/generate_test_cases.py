@@ -162,11 +162,16 @@ def build_injectable_dataframe(suite: TestCaseSuite, params: List[str], param_ty
 
 
 def _generate_suite(source_path: str, function_name: str, param_types: Dict[str, str],
-        num_cases: int, model: str) -> Tuple[TestCaseSuite, List[str]]:
+        num_cases: int, model: str, api_key: str = None) -> Tuple[TestCaseSuite, List[str]]:
     """ Calls Claude to generate a TestCaseSuite for the target function.
 
     Shared by `generate_test_cases()` and `generate_injectable_test_cases()`
     -- they differ only in which shape they render the result into.
+
+    :param api_key: Overrides ANTHROPIC_API_KEY for this call only (e.g. a
+        key entered in the frontend). Never logged or persisted; falls
+        back to the environment/`.env` when omitted.
+    :type  api_key: str
     :rtype: Tuple[TestCaseSuite, List[str]]
     """
     path = Path(source_path)
@@ -179,7 +184,7 @@ def _generate_suite(source_path: str, function_name: str, param_types: Dict[str,
             f"Supported types: {sorted(SUPPORTED_CAST_TYPES)}."
         )
 
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY (see .env)
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     prompt = build_prompt(function_source, function_name, params, num_cases)
 
     response = client.messages.parse(
@@ -193,19 +198,19 @@ def _generate_suite(source_path: str, function_name: str, param_types: Dict[str,
 
 
 def generate_injectable_test_cases(source_path: str, function_name: str, param_types: Dict[str, str],
-        num_cases: int = 10, model: str = DEFAULT_MODEL) -> pd.DataFrame:
+        num_cases: int = 10, model: str = DEFAULT_MODEL, api_key: str = None) -> pd.DataFrame:
     """ Generates an AI-authored test suite ready for
     `AbinModel.inject_tests()` -- same parameters as `generate_test_cases`,
     but returns the parsed (bare-column, typed-value) shape instead of
     the CSV-file shape.
     :rtype: pd.DataFrame
     """
-    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, model)
+    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, model, api_key)
     return build_injectable_dataframe(suite, params, param_types)
 
 
 def generate_test_cases(source_path: str, function_name: str, param_types: Dict[str, str],
-        num_cases: int = 10, model: str = DEFAULT_MODEL) -> pd.DataFrame:
+        num_cases: int = 10, model: str = DEFAULT_MODEL, api_key: str = None) -> pd.DataFrame:
     """ Generates an AI-authored test suite for a target function.
 
     :param source_path: Path to the .py file containing the function.
@@ -219,9 +224,11 @@ def generate_test_cases(source_path: str, function_name: str, param_types: Dict[
     :type  num_cases: int
     :param model: The Claude model to use.
     :type  model: str
+    :param api_key: Overrides ANTHROPIC_API_KEY for this call only.
+    :type  api_key: str
     :rtype: pd.DataFrame
     """
-    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, model)
+    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, model, api_key)
     return build_dataframe(suite, params, param_types)
 
 
