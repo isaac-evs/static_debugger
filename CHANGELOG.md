@@ -1,0 +1,698 @@
+# Changelog
+
+A log of notable fixes and architectural changes, with the reasoning
+behind each one. Newest first.
+
+## Frontend: auto-detected inputs, in-page API key, live streaming terminal
+
+**Module:** `frontend/app.py`, `frontend/templates/index.html`, `model/misc/generate_test_cases.py`
+
+**Description:** Three usability changes to the frontend:
+1. The free-text model/tests path fields are now `<select>` dropdowns
+   auto-populated from `benchmarks/*.py`/`*.csv`, and the function field
+   is auto-populated (via a new `/functions?model=...` endpoint that
+   parses top-level `def`s with `ast`) from whichever model is selected.
+2. Added an in-page Anthropic API key field (`type="password"`). It's
+   sent only in that run's POST body, used to construct the Anthropic
+   client for that call alone (`generate_test_cases.py`'s
+   `_generate_suite`/`generate_injectable_test_cases`/`generate_test_cases`
+   now take an optional `api_key` override), and is never written to
+   disk, `.env`, or logged &mdash; falls back to `.env`'s
+   `ANTHROPIC_API_KEY` when left blank.
+3. Replaced the separate results page with a live terminal panel: `/run`
+   now starts the debugging session on a background thread and returns
+   a `run_id` immediately; `/stream/<run_id>` is a Server-Sent-Events
+   endpoint that forwards `AbinLogging.debugging_logger`'s records (via
+   a thread-filtered logging handler, so concurrent runs/tabs don't
+   cross-talk) plus the final result to the browser in real time.
+
+**Impact:** Running the actual repair on a background thread (needed so
+the request/response cycle stays free for the SSE connection) means
+`AbinModel`'s signal-based per-test timeout (`signal.setitimer`) no
+longer reliably protects this UI: confirmed empirically that a
+SIGALRM armed from a worker thread still fires, but on the *main*
+thread, not the worker actually running the candidate. A genuinely
+infinite-looping candidate can therefore hang a web UI run
+indefinitely with no recovery short of restarting the server. `cli.py`
+is unaffected (single-threaded, main-thread execution) and remains the
+safe choice for untrusted/adversarial candidates.
+
+**Fix:** N/A (new capability). Documented the timeout caveat directly
+in `frontend/app.py`'s module docstring.
+
+**Verified:** Loaded `/`, confirmed both dropdowns list every
+`benchmarks/*.py`/`*.csv` file; `/functions?model=benchmarks/Middle.py`
+returns `["middle1", "middle2"]`; drove `/run` + `/stream/<run_id>` via
+curl end-to-end and got the full real-time hypothesis-by-hypothesis
+search trace culminating in the same successful repair as `cli.py`.
+Blanked `.env`'s `ANTHROPIC_API_KEY` and confirmed AI test generation
+still succeeds when the key is supplied only via the in-page field
+(and that `.env` itself is untouched afterward). Confirmed a
+nonexistent model path now surfaces the real underlying error
+("Unable to open the file...") in the stream before the final clean
+error line, and produces no stray files.
+
+---
+
+## Fix frontend paths breaking when launched from outside the project root
+
+**Module:** `frontend/app.py`, `frontend/templates/index.html`
+
+**Description:** The frontend resolved form paths (and, transitively,
+`config.py`'s `SQLITE_DB_PATH`) against the process's working directory.
+Starting the server from inside `frontend/` (a natural thing to try,
+since `app.py` lives there) silently broke both: the model path failed
+to compile (surfacing as an opaque `'NoneType' object is not
+subscriptable` from deep in `AbinModel._search`), and even when paths
+happened to resolve, a wrong-directory `SQLITE_DB_PATH` starved the
+hypothesis search of learned patterns, degrading a real repair into
+"UNABLE TO REPAIR" with no error at all. Separately, the form's default
+values were only `placeholder` hints (never actually submitted), so an
+untouched form silently posted empty strings.
+
+**Impact:** The exact repro a user hit: start the server, submit the
+form with its shown defaults untouched, get `Debugging run failed:
+'NoneType' object is not subscriptable`.
+
+**Fix:** `app.py` now `chdir`s to the project root at import time
+(`use_reloader=False` is required alongside it, since Werkzeug's
+debug-mode reloader re-execs using a relative script path that breaks
+once cwd has moved) and additionally resolves form paths against the
+project root explicitly via a `resolve_path()` helper, so absolute
+paths and any future cwd assumptions elsewhere in the codebase are
+both covered. `index.html`'s model/tests/func inputs now use real
+`value=` defaults instead of `placeholder=`.
+
+**Verified:** Started the server both from the project root and from
+inside `frontend/`; both now produce the same successful repair on
+`benchmarks/Middle.py`/`middle1`, both correctly degrade to a clean
+error page for a nonexistent model path, and `--generate-ai-tests`
+still works live from either directory.
+
+---
+
+## Add a minimal Flask frontend mirroring `cli.py`
+
+**Module:** `frontend/app.py`, `frontend/templates/*.html` (new), `requirements.txt`
+
+**Description:** Added a single-file Flask app (`frontend/app.py`) that
+exposes `cli.py`'s functionality (model/tests/func, complexity, schema,
+`--generate-ai-tests`/`--ai-model`) as an HTML form instead of CLI flags.
+It imports `cli` directly to reuse its `load_settings()` config wiring,
+and calls the same `AbinModel`/`parse_csv_data`/
+`generate_injectable_test_cases` functions the CLI uses &mdash; no
+duplicated debugging logic. Flask over FastAPI/PyQt: the repair loop is
+CPU-bound and blocking regardless of async support, so async buys
+nothing here, and a browser form needs far less code than a desktop GUI
+toolkit. The request blocks until the run finishes (spinner/wait, no
+streaming) &mdash; acceptable for a single-user local tool.
+
+**Impact:** N/A (new capability, additive only).
+
+**Fix:** N/A (new feature). Wrapped `abin.start_auto_debugging()` and
+CSV loading in try/except so a bad file path, missing function, or any
+other runtime failure renders a clean error message instead of a raw
+Flask debug traceback.
+
+**Verified:** Ran the server (`python3 frontend/app.py`) and drove it
+with `curl` end-to-end: the golden-path repair on `benchmarks/Middle.py`
+(`middle1`) produces the identical fix `cli.py` produces; `--generate-ai-tests`
+equivalent (`generate_ai_tests=2`) generates and injects real AI test
+cases live (suite grows 7&rarr;9) and still repairs successfully; a
+nonexistent model path, a nonexistent tests CSV, and a nonexistent
+function name each render a clean error page (200) instead of an
+unhandled 500/traceback.
+
+---
+
+## Fix `ANTHROPIC_API_KEY` from `.env` being ignored, add `.env.example`
+
+**Module:** `model/misc/generate_test_cases.py`, `.env.example` (new)
+
+**Description:** `load_dotenv()` doesn't override variables that already
+exist in the process environment. Several tools (e.g. Claude Code
+itself) export `ANTHROPIC_API_KEY` as an empty string into the shell,
+so even after setting a real key in `.env`, `generate_test_cases.py`
+kept picking up the blank shell value and failing authentication.
+
+**Impact:** `--generate-ai-tests` / `generate_test_cases.py` silently
+failed to authenticate for anyone with `ANTHROPIC_API_KEY` already
+(even blankly) set in their shell &mdash; the `.env` key appeared to be
+"not seen."
+
+**Fix:** Changed `load_dotenv()` to `load_dotenv(override=True)` so
+`.env` always wins for this module. Added `.env.example` documenting
+the expected variables.
+
+**Verified:** `python3 cli.py --model benchmarks/Middle.py --tests
+benchmarks/Middle.csv --func middle1 --generate-ai-tests 3` now
+generates and injects 3 real AI-authored test cases (suite grows
+7&rarr;10) and completes a successful repair, using a real
+`ANTHROPIC_API_KEY` in `.env` despite a blank `ANTHROPIC_API_KEY` also
+being present in the shell environment.
+
+---
+
+## Wire AI test generation and `inject_tests()` into `cli.py`
+
+**Module:** `cli.py`
+
+**Description:** `generate_injectable_test_cases()` and
+`AbinModel.inject_tests()` were only reachable by writing Python &mdash;
+the headless CLI had no way to trigger either. Added `--generate-ai-tests
+N` (and `--ai-model`) to `cli.py`: after loading the CSV test suite and
+constructing the `AbinModel`, it generates `N` AI-authored test cases
+(reusing `parsed_types` already produced by `parse_csv_data` for the
+parameter-type map, so no extra flag is needed for types) and injects
+them before `start_auto_debugging()` runs.
+
+**Impact:** Without this, the AI test generator and `inject_tests()`
+were dead ends from the CLI's perspective &mdash; usable only via a
+one-off Python script.
+
+**Fix:** Generation failures (e.g. missing `ANTHROPIC_API_KEY`) are
+caught and reported as a clean CLI message; debugging continues with
+the original test suite instead of crashing.
+
+**Verified:** `cli.py --model benchmarks/Middle.py --tests
+benchmarks/Middle.csv --func middle1 --generate-ai-tests 3` builds the
+param-type map correctly, calls `generate_injectable_test_cases()`
+correctly, fails cleanly (no traceback) on the intentionally-blank
+`ANTHROPIC_API_KEY`, and the repair loop still completes successfully
+on the original suite. Plain `cli.py` invocation (no `--generate-ai-tests`)
+re-verified unaffected; also re-ran `PasswordStrength.py` and
+`HappyNumber.py` benchmarks end-to-end with no crashes.
+
+---
+
+## Add AI-generated test case tooling and an `inject_tests()` lifecycle hook
+
+**Module:** `AbinModel.py`, `model/misc/generate_test_cases.py` (new)
+
+**Description:** Added a standalone module that calls the Claude API to
+generate CSV test suites for a target function, using SDET methodology
+(equivalence partitioning, boundary value analysis, MC/DC condition
+coverage). `expected_output` is derived from what the function's name,
+signature, and docstring say it *should* do, not by executing the
+(possibly buggy) implementation, so bugs in the current code don't get
+baked into the "expected" values. Added `AbinModel.inject_tests(new_tests)`
+so a caller can append additional test cases (e.g. AI-generated ones,
+via the new `generate_injectable_test_cases()`) after constructing an
+`AbinModel` and before calling `start_auto_debugging()`.
+
+**Impact:** Previously test ingestion was a one-time static load from a
+single CSV at construction time, with no supported way to extend a
+suite afterward. A broader subprocess/JSON "plugin hub" architecture was
+considered and rejected as premature (no third-party plugin authors
+exist yet, and it would add subprocess lifecycle, schema-versioning, and
+cross-process debugging overhead) in favor of this minimal, low-risk
+seam.
+
+**Fix:** `inject_tests()` validates that the injected DataFrame has the
+same (already-parsed) columns as `self.test_suite` &mdash; bare
+parameter-name columns holding typed Python values, the shape
+`AbinModel.parse_csv_data()` produces, not raw CSV cell text &mdash; then
+concatenates and updates both `self.test_suite` and
+`self.evaluation_engine.test_suite` (the latter holds its own separate
+reference captured at construction time, so both must be kept in sync).
+
+**Verified:** Constructed a real `AbinModel` against
+`benchmarks/Middle.py`/`Middle.csv`, injected a synthetic test case, and
+confirmed both `self.test_suite` and `self.evaluation_engine.test_suite`
+reflect the appended row; confirmed a column-mismatch injection raises
+`ValueError`. Confirmed `build_injectable_dataframe()`'s output column
+shape matches `AbinModel.parse_csv_data()`'s real output for
+`benchmarks/Middle.csv`.
+
+---
+
+## Fix "Hyphotesis" typo project-wide
+
+**Module:** `AbinModel.py`, `model/HyphotesisTester.py` &rarr; `model/HypothesisTester.py`, `model/HypothesisRefinement.py`, `model/EvaluationEngine.py`
+
+**Description:** "Hypothesis" was consistently misspelled "Hyphotesis"
+across a module filename, a class name, and several attributes/methods
+(`HyphotesisTester`, `hyphotesis_tester`, `bugfixing_hyphotesis`,
+`hyphotesis_testing`, `hyphotesis_refinement`).
+
+**Impact:** No functional effect (internally consistent), but confusing
+for anyone reading the code or building on top of it &mdash; especially the
+public-facing `bugfixing_hyphotesis` attribute reporting the final result.
+
+**Fix:** Renamed the file (`git mv`) and every identifier consistently.
+Left historical CHANGELOG entries as-is, since they're an accurate record
+of the code as it existed at the time.
+
+**Verified:** Full `Middle.py`/`HappyNumber.py` benchmarks unaffected;
+`abin.bugfixing_hypothesis` correctly reports the winning fix.
+
+---
+
+## Remove unused get_ranked_candidates (missing self, would misroute args)
+
+**Module:** `model/core/AbinDebugger.py`
+
+**Description:** `get_ranked_candidates` was defined inside `AbinDebugger`
+with no `self`/`cls` parameter and no `@staticmethod` decorator, so calling
+it on an instance (`abin.get_ranked_candidates(...)`) would pass `self` as
+the first positional argument (`target_func`), misrouting every argument.
+
+**Finding:** Not reachable in practice: it has no callers anywhere in the
+codebase.
+
+**Fix:** Deleted the method instead of fixing a bug in dead code, along
+with the `TargetVisitor`/`CallVisitor`/`FunctionVisitor`/`StatementVisitor`/
+`ASTNode` imports that existed only to support it.
+
+---
+
+## Replace deprecated ast.Str docstring check with ast.Constant
+
+**Module:** `model/FaultLocalizator.py` (`parse_model`)
+
+**Description:** Docstring stripping checked `isinstance(node.value, ast.Str)`.
+`ast.Str` was deprecated in Python 3.8 in favor of `ast.Constant`, kept
+only as a compatibility shim, and is slated for removal in Python 3.14.
+
+**Impact:** Not broken today (the compat shim still correctly
+distinguishes string constants on 3.12), but emits a `DeprecationWarning`
+on every check and will raise outright once this project moves to 3.14.
+
+**Fix:** Replaced with `isinstance(node.value, ast.Constant) and
+isinstance(node.value.value, str)`.
+
+**Verified:** Ran under `-W error::DeprecationWarning` to confirm zero
+warnings fire; a real docstring is still stripped correctly, and a bare
+numeric expression statement (not a docstring) is correctly left alone.
+Full `Middle.py` benchmark unaffected.
+
+---
+
+## Fix short-circuited predicate that silently dropped bound methods
+
+**Module:** `model/core/AbinDebugger.py` (`get_all_func_names`)
+
+**Description:** `getmembers(module, isfunction or ismethod)` &mdash; since
+`isfunction` is itself a truthy function object, `isfunction or ismethod`
+evaluates to `isfunction` alone at the `or` expression, before `getmembers`
+is even called; `ismethod` is never consulted.
+
+**Impact:** Any module-level bound method reference would be silently
+excluded from the function names used to filter suspicious-ranking
+events, since it's neither caught by `isfunction` nor ever checked
+against `ismethod`.
+
+**Fix:** Replaced the bare `isfunction or ismethod` with an actual
+predicate function, `lambda obj: isfunction(obj) or ismethod(obj)`.
+
+**Verified:** A module-level plain function and a module-level bound
+method reference are both now found by `get_all_func_names` (only the
+plain function was found before the fix). Full `Middle.py` benchmark
+unaffected.
+
+---
+
+## Stop stripping string literals out of reconstructed logical lines
+
+**Module:** `model/abstractor/PythonLLOC.py` (`logical_LOC`)
+
+**Description:** When reconstructing a logical line of code from tokenize
+output, every `STRING` token was unconditionally skipped, regardless of
+whether it was a standalone docstring or part of a larger statement.
+
+**Impact:** Any string literal embedded in a real statement (e.g.
+`elif c == "x" or c == "y":`) got stripped out along with genuine
+docstrings, producing broken text like `elif c == or c == :`. Verified
+directly with that exact input.
+
+**Fix:** Track the tokens on each logical line separately from the
+reconstructed text. A line is only treated as a skippable
+docstring/bare-string statement when its *entire* content is a single
+`STRING` token (nothing else) &mdash; any string that's part of a larger
+statement is now preserved.
+
+**Verified:** The exact reproduction (`elif c == "x" or c == "y":`) now
+reconstructs correctly; a true docstring-only line still correctly
+returns `None`; plain code with no strings and code with embedded string
+comparisons/assignments are all unaffected. Full `Middle.py`/
+`HappyNumber.py`/`PasswordStrength.py` benchmarks unaffected.
+
+---
+
+## Remove unused clean_temporal_files (crashes if called, has no callers)
+
+**Module:** `model/FaultLocalizator.py`
+
+**Description:** `clean_temporal_files` used `with curr_dir.joinpath('temp') as temp_dir:`
+&mdash; `pathlib.Path` doesn't implement the context manager protocol, so
+calling this method would immediately crash with
+`AttributeError: 'PosixPath' object has no attribute '__enter__'`.
+
+**Finding:** Not reachable in practice: it has no callers anywhere in the
+codebase. It existed to clean up the `temp/` directory from the old
+disk-based candidate-writing workflow, which was already removed
+(`model/HypothesisGenerator.py` no longer writes candidates to disk).
+
+**Fix:** Deleted the method instead of fixing a bug in dead code, along
+with the `pathlib`/`shutil` imports that existed only to support it.
+
+---
+
+## Compare typed test results instead of their string representations
+
+**Module:** `AbinModel.py` (`parse_csv_data`), `model/core/ModelTester.py` (`model_testing`)
+
+**Description:** Test assertions compared `str(test_result) == str(expected_output)`.
+`expected_output` has no `:type` annotation in the CSV (unlike input-arg
+columns, which already use `json.loads` for `list`/`tuple`/`dict`), so it
+was always left as a raw string.
+
+**Impact:** `str()`-comparison is both incorrect and formatting-fragile:
+`str(1.0) != str(1)` and `str(True) != str(1)` despite being equal values,
+and a sequence written as `"[1,2,3]"` in the CSV would never match a
+function returning `[1, 2, 3]` (Python's own `str()` adds a space after
+each comma) even though the values are identical.
+
+**Fix:** Added `coerce_expected_output()`, applied to the whole
+`expected_output` column in `parse_csv_data`: tries `ast.literal_eval` to
+recover the real typed value (int/float/bool/None/list/tuple/dict/...),
+falling back to the raw string when the cell isn't a valid literal (e.g.
+unquoted text like a password-strength label). `model_testing` now
+compares `test_result == expected_output` directly (wrapped in a
+try/except, so an exotic `__eq__` can't crash the test loop) instead of
+stringifying both sides.
+
+**Verified:** All three failure modes above now pass correctly
+(`[1,2,3]`-vs-`[1, 2, 3]`, `True`-vs-`"1"`, `1.0`-vs-`"1"`). Full
+`Middle.py`/`HappyNumber.py`/`BitonicSort.py` benchmarks unaffected.
+
+---
+
+## Fix constant abstraction corrupted by deprecated ast.Num/ast.Str shims
+
+**Module:** `model/abstractor/NodeMapper.py`, `NodeAbstractor.py`, `HypothesisAbductor.py`
+
+**Description:** The identifier-attribute list used for abstraction was
+hardcoded as `['id', 'n', 's', 'name', 'asname', 'module', 'attr', 'arg']`.
+`ast.Num`/`ast.Str` (`.n`/`.s`) were deprecated in favor of `ast.Constant`
+(`.value`) back in Python 3.8, but kept as compatibility shims that proxy
+straight to `.value` &mdash; on Python 3.12 those shims make `hasattr(node, 'n')`
+*and* `hasattr(node, 's')` both `True` for every `Constant` node.
+
+**Impact:** Worse than "ignored": every numeric/string/bool/None constant
+got abstracted *twice*. The first pass correctly mapped it to a label; the
+second pass read that label back through the *other* shim (since both
+proxy to the same `.value`), treated it as a brand new token, and
+overwrote it with a second, wrong label &mdash; corrupting the identifier
+mapping and the resulting pattern hexdigest for every constant. Verified
+directly: abstracting the literal `42` produced `map_ids={'42':
+'Constant0', 'Constant0': 'Constant1'}` and left `node.value` as the
+string `'Constant1'` instead of a usable label for `42`.
+
+**Fix:** Replaced `'n'`/`'s'` with `'value'` in all four occurrences of the
+identifier list, guarded by a new `has_identifier_attr()` helper that only
+treats `'value'` as an identifier on `ast.Constant` nodes specifically
+(`.value` is also a plain child-node field on `Attribute`, `Subscript`,
+`Return`, `Assign`, etc., which must never be abstracted the same way).
+Also fixed the companion type-coercion logic in
+`HypothesisAbductor.abduct_node`, which used to special-case node types
+named `'Num'`/`'Bytes'` to restore a substituted string back to a real
+int/float/complex/bytes &mdash; those never fire for a unified `Constant`
+label, so also added explicit `None`/`bool` handling.
+
+**Verified:** Abstracting `42`/`3.14`/`'hello'`/`True`/`None` each now
+produces exactly one clean label with no corruption. A full abduction
+round-trip (`return 1` &rarr; `return 99`-style fix pattern, offering
+candidate tokens `1`/`42`/`100`) produces real integer literals
+(`return 42`) rather than quoted strings (`return '42'`). Confirmed the
+pre-fix code reproduces the exact corruption described above. Full
+`Middle.py`/`HappyNumber.py` benchmarks unaffected (neither exercises
+constant abstraction).
+
+---
+
+## Remove unused inspect.getsource()-based code
+
+**Module:** `model/core/AbinDebugger.py`, `model/debugger/StatisticalDebugger.py`
+
+**Description:** `AbinDebugger.get_model_ast` and `SpectrumDebugger.code()`
+(plus its `_repr_html_`/`__str__`/`__repr__` wrappers) had no callers
+anywhere in the codebase &mdash; `get_model_ast` is simply never invoked, and
+`SpectrumDebugger`'s `__str__`/`__repr__` are fully shadowed in
+`AbinDebugger`'s MRO by `RankingDebugger`'s (confirmed via `__mro__`
+inspection), so `code()` could never actually run.
+
+**Fix:** Deleted both, rather than keep unused surface area around. Also
+removes the module's last usage of `cgitb` (deprecated since 3.11, removed
+entirely in 3.13) and `inspect`, since nothing else in the file needed them.
+
+---
+
+## Pin candidate comparisons to a stable baseline instead of a drifting one
+
+**Module:** `AbinModel.py` (`_search`)
+
+**Description:** Candidate hypotheses are evaluated by comparing their test
+observations against a baseline (`prev_observation`). Inside the sibling
+hypothesis loop, that same variable was also being reassigned to whatever a
+nested recursive dive (triggered by an earlier sibling's `Improvement`)
+happened to return.
+
+**Impact:** A sibling hypothesis tried *after* another one triggered a
+recursive dive was compared against that unrelated deeper candidate's
+leftover observation instead of the actual baseline, instead of the
+original unpatched program's behavior &mdash; corrupting `Behavior`
+classification (Improvement/Same/Worsened) for every subsequent sibling at
+that search depth and making sequential runs non-deterministic.
+
+**Fix:** Introduced `baseline_observation`, captured once per
+localizator/model and left untouched by recursive calls; every hypothesis
+evaluated against the *same* set of siblings now uses it. `prev_observation`
+still tracks the current best result for return-value/refinement bookkeeping,
+but is no longer conflated with the comparison baseline. The baseline is
+only refreshed when a genuinely new starting point is drawn (a refinement
+retry re-runs `model_testing()` on a different improvement candidate).
+
+**Verified:** A targeted reproduction (two sibling hypotheses where the
+first triggers a recursive dive returning a different observation shape)
+confirmed the second sibling was compared against the dive's leftover
+result pre-fix, and against the correct original baseline post-fix. Full
+`Middle.py` benchmark (all three schemas) unaffected.
+
+---
+
+## Fix dangling SIGALRM leaking across sequential test runs
+
+**Module:** `model/core/ModelTester.py` (`model_testing`), `model/core/AbinDebugger.py` (`__exit__`)
+
+**Description:** The test-timeout timer (`signal.setitimer(ITIMER_REAL, TEST_TIMEOUT)`)
+was armed inside `with debugger:` and disarmed (`setitimer(..., 0)`) on the
+line right after the block, with no `try`/`finally` between them.
+
+**Impact:** When a candidate patch caused a runtime exception, some
+exception paths make `AbinDebugger.__exit__` return `False` (re-raising
+instead of swallowing) &mdash; that skips the disarm line entirely, leaving the
+OS alarm clock armed in the background. It then fires `SIGALRM`
+asynchronously mid-way through a later, unrelated test, crashing it with a
+spurious `TimeoutError`.
+
+**Fix:** Wrapped the per-test-case execution in `try`/`finally`, so
+`signal.setitimer(ITIMER_REAL, 0)` always runs regardless of which path
+`__exit__` takes.
+
+**Verified:** Reproduced the exact re-raise path (a `ModelTester` whose
+target function doesn't exist, so no `call` event is ever captured) and
+confirmed that before the fix the timer was left armed with ~5 seconds
+still pending after the exception propagated; after the fix it's reliably
+`(0.0, 0.0)` in every case. Full `Middle.py` benchmark unaffected.
+
+---
+
+## Upgrade SBL tracing to sys.monitoring (PEP 669) and fix function-wrapper cache
+
+**Module:** `model/debugger/Tracer.py`, `model/debugger/StackInspector.py`, `model/debugger/Collector.py`, `model/debugger/AbinCollector.py`
+**Requires:** Python 3.12+ (bumped from 3.9; see `.python-version`/`requirements.txt`)
+
+**Description:** SBL instrumentation relied on legacy `sys.settrace` hooks, and
+inside the tracing hooks `StackInspector.create_function` was caching by
+`(function_name, lineno)` &mdash; a key that changes on almost every traced
+line, so it failed to deduplicate and effectively created a new `FunctionType`
+wrapper per line anyway.
+
+**Impact:** `sys.settrace` hands a full frame to Python on every single event,
+introducing a heavy execution penalty on iterative/recursive code. On top of
+that, the ineffective cache meant thousands of redundant `FunctionType`
+allocations per test run (measured: a `fib(20)` trace alone would have
+produced 87,566 `FunctionType` objects for 2 actual functions), adding GC
+pressure on longer benchmark runs.
+
+**Fix:** Replaced `sys.settrace` with `sys.monitoring` (PEP 669) &mdash; the
+project now requires Python 3.12+ for this. `sys.settrace` is kept only as a
+defensive fallback if a monitoring tool slot can't be claimed. Fixed
+`create_function`'s cache to key on the code object itself (unique per
+compiled function, constant across every line of one execution, and safe
+against cross-run collisions between independently-compiled candidate
+models). Added `resolve_function()`, a cached combination of
+`search_func`/`create_function`, and switched `CoverageCollector`/
+`AbinCollector` to use it instead of duplicating that lookup on every event.
+Caches are per-instance (not class-level), so they don't accumulate stale
+entries across the lifetime of a long repair session.
+
+Verified: `sys.monitoring` correctly active end-to-end (confirmed via tool-id
+introspection), the SIGALRM test-timeout mechanism still interrupts correctly
+under the new tracer, the cache fix reduces a `fib(20)` trace from 87,566
+`FunctionType` allocations down to 2, and the full `Middle.py`/`HappyNumber.py`
+benchmarks are unaffected.
+
+---
+
+## Extend fault localization to boolean sub-expressions
+
+**Module:** `model/HypothesisGenerator.py`, `model/abstractor/SubExpressionVisitor.py`
+
+**Description:** Spectrum-based localization (Ochiai) ranks suspiciousness
+strictly at the Line-of-Code level, but AST pattern synthesis operates at
+the AST node/sub-expression level.
+
+**Impact:** If a faulty line contains a compound expression (e.g.
+`if check(u) and authorize(p):`), Ochiai flags the entire line, but the
+abduction engine had no way to target the specific sub-node that actually
+holds the defect &mdash; a fix pattern only matched if it happened to cover
+the *entire* line's structure.
+
+**Fix:** Added `get_boolop_operands()`, which decomposes an `if`/`while`
+test's boolean chain into its individual operands. `HypothesisGenerator`
+now tries the whole-statement candidate first (unchanged default behavior)
+and, only if that finds no matching patterns, falls back to matching each
+operand individually, splicing the abducted fix back into a standalone
+header line. Verified end-to-end with a pattern that only matches a single
+operand of a two-operand `and` expression: the fallback correctly finds and
+applies it while leaving the sibling operand untouched.
+
+---
+
+## Filter incompatible hypothesis candidates via lightweight symbol table
+
+**Commit:** `704231f`
+**Module:** `model/abstractor/HypothesisAbductor.py`, `model/HypothesisGenerator.py`
+
+**Description:** Candidate identifiers were substituted into hypotheses via a
+brute-force Cartesian product over every name of the right AST-node category,
+with no regard for how the name is actually used (e.g. plugging an int
+variable into a `Call.func` slot).
+
+**Impact:** Every nonsensical combination still cost a full test-suite run
+before failing with a `NameError`/`TypeError`, wasting significant execution
+time on candidates that could never work.
+
+**Fix:** Added `SymbolTable`, which walks the bugged program once and records
+best-effort usage evidence per name (ever called, ever subscripted/iterated).
+`HypothesisAbductor.infer_template_roles()` determines each abstract label's
+structural role from the fix pattern's own AST shape, and `get_possible_ids()`
+filters each candidate slot by role before the Cartesian product/test
+evaluation stage.
+
+---
+
+## Fix RCE via unsafe eval() of AST pattern metadata
+
+**Commit:** `c7fd06e`
+**Module:** `model/abstractor/HypothesisAbductor.py`, `model/abstractor/Bugfix.py`
+
+**Description:** AST nodes were reconstructed from stored pattern metadata
+with `eval(dump_src, vars(ast), {})`.
+
+**Impact:** Since `vars(ast)` has no `__builtins__` key, Python silently
+injects the real `__builtins__` into it for `eval()`, so a crafted
+`abstract_node` string (e.g. from a pattern mined off an untrusted public
+repo via `--mine`) could call `__import__`/`open`/etc. and execute arbitrary
+code &mdash; a critical Remote Code Execution vulnerability.
+
+**Fix:** Added `SafeASTLiteral.safe_ast_literal_eval()`, which parses the
+dump text with `ast.parse()` (pure syntax, nothing executes) and walks the
+tree, reconstructing only `ast.AST` subclass calls and literals/lists/tuples.
+Anything else raises `ValueError` instead of running.
+
+---
+
+## Fix tight coupling of search traversal and runtime evaluation
+
+**Commit:** `55cfd4f`
+**Module:** `AbinModel.py` (`start_auto_debugging`)
+
+**Description:** DFS/BFS/A* search traversal, DB-backed hypothesis
+generation, and test-suite evaluation were mixed into one monolithic
+recursive method that mutated `self.bugfixing_hyphotesis`/`self.candidate`
+on every stack frame.
+
+**Impact:** On DFS backtracking, a parent frame's own (unrelated) hypothesis
+could silently overwrite a child frame's actual winning fix before it
+propagated back up.
+
+**Fix:** Added `SearchSchema` (stateless DFS/BFS/A* traversal strategies) and
+`EvaluationEngine` (pure candidate evaluation, no shared state). Split
+`start_auto_debugging` into a thin public entry point and a private
+`_search` that returns a pure `SearchResult` &mdash; including the actual
+winning hypothesis/candidate/depth &mdash; instead of relying on instance
+attributes mutated across recursive frames.
+
+---
+
+## Fix state mutation via disk scraping & dynamic import contamination
+
+**Commit:** `4669e3c`
+**Module:** `model/HypothesisGenerator.py`, `model/core/ModelTester.py`, `model/HyphotesisTester.py`
+
+**Description:** To test candidate repair hypotheses, the engine wrote
+physical temporary files to disk (`temp/model{N}.py`), guessed line
+indentation with a regex (`re.split('\w', ...)`), and dynamically
+re-imported the file via `importlib` spec loaders.
+
+**Impact:** Running concurrent test suites or parallel debugging sessions on
+the same machine caused race conditions where workers overwrote each other's
+temporary disk files. Physical disk I/O per candidate also added latency,
+and imported modules risked stale bytecode lingering in `sys.modules`.
+
+**Fix:** Replaced the `SourceLoader`/`spec_from_loader`/`module_from_spec`
+machinery in `ModelTester` with `compile()` + `exec()` into an isolated
+`ModuleType` namespace (no disk I/O, nothing added to `sys.modules`). Replaced
+the regex indentation guess in `ModelConstructor.build_hypothesis_model` with
+an `ast.NodeTransformer` that splices the hypothesis into the parsed tree.
+Removed the dead disk-writing methods in `HypothesisGenerator` that were
+unreachable in the live pipeline.
+
+---
+
+## Replace MongoDB daemon dependency with embedded SQLite
+
+**Module:** System-wide architecture (`AbinModel`, `AbinDriver`, `cli.py`)
+
+**Description:** The repair pipeline relied on an external document database
+daemon (`mongod` on port 27017) to store and query AST bug patterns.
+
+**Impact:** Requiring developers or CI/CD pipelines to install, configure,
+authenticate, and run a separate background database service just to debug
+or repair a local Python script introduced excessive usability friction.
+Inter-process communication over TCP loopback sockets was also far slower
+than in-memory/local-file lookups.
+
+**Fix:** Replaced MongoDB with embedded SQLite (`patterns.db`), using modern
+SQLite's native JSON support (`json_extract`, `json_tree`) to index and query
+pattern data from a portable, self-contained local file &mdash; no daemon
+required.
+
+---
+
+## Headless CLI Orchestrator (decouple GUI)
+
+**Module:** `AbinDriver.py` & Engine Orchestrator
+
+**Description:** The engine was tightly coupled to desktop GUI components
+(`pyqtSignalQueue`, `AbinView`).
+
+**Impact:** A true CI/CD-ready or plugin-driven platform can't depend on a
+graphical event loop.
+
+**Fix:** Extracted the core repair loop out of the PyQt driver and into a
+standalone CLI orchestrator (`cli.py`, using `argparse`). The PyQt interface
+is relegated to a completely optional client that merely invokes the CLI.
