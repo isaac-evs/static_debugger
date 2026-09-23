@@ -357,10 +357,26 @@
     const copyBtn = document.getElementById('copy-btn');
 
     copyBtn.addEventListener('click', async () => {
+      if (flushScheduled) flushTerminal(); // don't miss lines still queued for the next frame
       await navigator.clipboard.writeText(terminal.innerText);
       const original = copyBtn.textContent;
       copyBtn.textContent = 'Copied';
       setTimeout(() => { copyBtn.textContent = original; }, 1200);
+    });
+
+    // Inside the desktop app (pywebview), <a download> just navigates the
+    // single bare window to the raw CSV text with no way back -- WKWebView
+    // doesn't implement a real download flow for it. Route through a
+    // native Save As dialog instead when running inside pywebview; a
+    // normal browser tab (the web frontend) keeps the plain <a download>.
+    const downloadLink = document.getElementById('download-link');
+    downloadLink.addEventListener('click', async (e) => {
+      if (!window.pywebview) return; // plain browser: let <a download> handle it
+      e.preventDefault();
+      const url = downloadLink.dataset.downloadUrl;
+      if (!url) return;
+      const csvText = await (await fetch(url)).text();
+      await window.pywebview.api.save_csv(csvText, url.split('/').pop());
     });
 
     async function refreshFunctions() {
@@ -433,23 +449,55 @@
     });
 
     // --- Terminal / run ---
-    function appendLine(text, cls) {
-      const line = document.createElement('div');
-      line.className = 'line' + (cls ? ' ' + cls : '');
-      line.textContent = text;
-      terminal.appendChild(line);
+    // A hard-to-repair benchmark can stream ~200 lines/second. Appending
+    // each one individually -- and recomputing scrollTop on every single
+    // append -- forces a synchronous layout reflow per line, which is
+    // exactly what was freezing the UI. Queue incoming lines instead and
+    // flush at most once per animation frame (~60/sec cap regardless of
+    // how fast the stream produces them), coalescing many DOM writes and
+    // one scrollTop recalculation into one per frame.
+    let pendingItems = [];
+    let flushScheduled = false;
+
+    function queueItem(item) {
+      pendingItems.push(item);
+      if (!flushScheduled) {
+        flushScheduled = true;
+        requestAnimationFrame(flushTerminal);
+      }
+    }
+
+    function flushTerminal() {
+      flushScheduled = false;
+      const items = pendingItems;
+      pendingItems = [];
+      const frag = document.createDocumentFragment();
+      for (const item of items) {
+        if (item.type === 'line') {
+          const line = document.createElement('div');
+          line.className = 'line' + (item.cls ? ' ' + item.cls : '');
+          line.textContent = item.text;
+          frag.appendChild(line);
+        } else if (item.type === 'code') {
+          const pre = document.createElement('pre');
+          pre.className = 'code-block';
+          pre.textContent = item.text;
+          frag.appendChild(pre);
+        }
+      }
+      terminal.appendChild(frag);
       terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function appendLine(text, cls) {
+      queueItem({type: 'line', text, cls});
     }
 
     function appendResult(result) {
       const cls = 'result-' + result.status;
       appendLine(result.message, cls);
       if (result.code) {
-        const pre = document.createElement('pre');
-        pre.className = 'code-block';
-        pre.textContent = result.code;
-        terminal.appendChild(pre);
-        terminal.scrollTop = terminal.scrollHeight;
+        queueItem({type: 'code', text: result.code});
       }
       if (result.stats) showResults(result.status, result.stats);
     }
@@ -469,7 +517,9 @@
       document.getElementById('bar-before-count').textContent = `${stats.before_passed}/${stats.total_tests}`;
       document.getElementById('bar-after-count').textContent = `${stats.after_passed}/${stats.total_tests}`;
 
-      document.getElementById('download-link').href = stats.download_url;
+      const link = document.getElementById('download-link');
+      link.href = stats.download_url;
+      link.dataset.downloadUrl = stats.download_url;
 
       const panel = document.getElementById('results-panel');
       panel.classList.remove('visible');
@@ -486,6 +536,7 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       terminal.innerHTML = '';
+      pendingItems = [];
       document.getElementById('results-panel').classList.remove('visible');
       setRunning(true);
 

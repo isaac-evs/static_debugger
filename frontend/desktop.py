@@ -21,6 +21,30 @@ import webview
 from app import app
 
 
+class Api:
+    """ Exposed to the page as window.pywebview.api.* (see the JS bridge
+    docs: https://pywebview.flowrl.com/guide/api.html). Used only for the
+    CSV download -- WKWebView (macOS) doesn't honor <a download>/
+    Content-Disposition inside a bare pywebview window: instead of saving
+    a file, it just navigates the single window to the raw CSV text, with
+    no browser chrome to navigate back from. Routing the save through a
+    native OS "Save As" dialog avoids that navigation entirely. """
+
+    def save_csv(self, csv_text: str, suggested_name: str) -> bool:
+        """ :rtype: bool """
+        result = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE,
+            save_filename=suggested_name,
+            file_types=("CSV Files (*.csv)", "All files (*.*)"),
+        )
+        if not result:
+            return False
+        path = result if isinstance(result, str) else result[0]
+        with open(path, "w", newline="") as f:
+            f.write(csv_text)
+        return True
+
+
 def _free_port() -> int:
     """ Picks an available local TCP port, so a leftover process already
     bound to the default port can never block this launch.
@@ -57,7 +81,8 @@ def main() -> None:
     ).start()
     _wait_until_ready(port)
 
-    webview.create_window("AbinDebugger", f"http://127.0.0.1:{port}/", width=1280, height=860, min_size=(900, 600))
+    webview.create_window("AbinDebugger", f"http://127.0.0.1:{port}/", width=1280, height=860,
+                           min_size=(900, 600), js_api=Api())
     webview.start()
 
 

@@ -3,6 +3,56 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix desktop app: CSV download stranding the window, and streaming freezes
+
+**Module:** `frontend/desktop.py`, `frontend/templates/index.html`
+
+**Description:** Two bugs specific to the desktop app (pywebview), not
+the plain browser frontend:
+
+1. **CSV download.** `<a download>`/`Content-Disposition: attachment`
+   isn't honored by a bare pywebview window on macOS (WKWebView) --
+   instead of saving a file, the single window just navigates to the
+   raw CSV text, with no browser chrome to get back from. Fixed by
+   exposing a `save_csv(csv_text, filename)` method on a
+   `js_api`-bound `Api` class in `desktop.py`, which opens a native OS
+   "Save As" dialog (`window.create_file_dialog(FileDialog.SAVE, ...)`)
+   and writes the file directly -- the window never navigates away.
+   The download link's click handler checks for `window.pywebview`
+   and only takes this path inside the desktop app; a plain browser
+   tab keeps the original `<a download>` behavior, which works fine
+   there.
+2. **Freezing during a run.** Measured a harder benchmark
+   (`PasswordStrength.py`, complexity 4) streaming **~200 SSE
+   messages/second** sustained for 10+ seconds. Every single one
+   triggered `terminal.appendChild()` *and* a `scrollTop` read/write --
+   a synchronous layout reflow per line, on every line, at that rate.
+   That's the freeze. Fixed by queueing incoming lines and flushing
+   them to the DOM (as one `DocumentFragment`, one `scrollTop`
+   recalculation) at most once per animation frame via
+   `requestAnimationFrame`, capping reflows to ~60/sec regardless of
+   how fast the stream produces lines.
+
+**Impact:** The Results panel's CSV download was unusable in the
+packaged app (the whole point of that feature for a non-technical
+user), and any repair run harder than the bundled toy examples visibly
+froze the UI.
+
+**Fix:** See above.
+
+**Verified:** Confirmed the SSE flood rate directly (2714 lines over
+13.75s on `PasswordStrength.py`, ~197 lines/sec) before fixing it.
+Confirmed `window.pywebview.api.save_csv` is correctly exposed as a
+callable function in a real pywebview window via `evaluate_js` (can't
+automate the native OS save dialog itself, but verified the file-write
+logic in isolation by mocking the dialog's return path and confirming
+the written file's contents). Rebuilt `AbinDebugger.app`, re-ran the
+same `PasswordStrength.py` load against the frozen app's own server --
+identical stream output/duration, confirming the batching change
+(pure client-side rendering, no backend change) doesn't alter results.
+
+---
+
 ## Add a results panel (stats + CSV download) to the frontend, rewrite the README
 
 **Module:** `frontend/app.py`, `frontend/templates/index.html`, `README.md`
