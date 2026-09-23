@@ -3,6 +3,52 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Add a results panel (stats + CSV download) to the frontend, rewrite the README
+
+**Module:** `frontend/app.py`, `frontend/templates/index.html`, `README.md`
+
+**Description:** Added a "Results" panel to the web interface that
+appears once a run finishes: status, hypotheses tried, run duration,
+and a before/after "tests passing" comparison rendered as two small
+bars. A "Download results (CSV)" link exports a `test_case,before,after`
+table. Backend: `_execute_run` now times the run, computes pass counts
+from `prev_observation`/`new_observation` by *position* (not by test
+name -- a test that never got to execute is recorded under the generic
+name `'UndefinedTest'` in the observation, so joining by name would
+silently collapse multiple distinct tests into one row), stores the
+rendered CSV in an in-memory `RUN_RESULTS` dict capped at 30 entries,
+and serves it from a new `/download/<run_id>.csv` route.
+
+Also rewrote `README.md` from scratch. The previous version described
+a fictional architecture that doesn't match the code: a nonexistent
+`repair_knowledge.db`/JSONB storage layer (the real file is
+`patterns.db`, plain `TEXT` column), and an "AI/LLM Patch Generator
+Plugin" that was explicitly designed against and rejected earlier in
+favor of the minimal `inject_tests()` hook. The one accurate claim
+(`sys.monitoring`/PEP 669 fault-localization tracing) was verified
+against `model/debugger/Tracer.py` and kept. New version is written for
+someone with zero context on the project: what problem it solves in
+plain language, the three ways to run it (desktop app / web / CLI),
+install + quick-start steps, and an accurate project layout.
+
+**Impact:** N/A (new capability + documentation fix, no behavior
+change to the repair engine itself).
+
+**Fix:** N/A.
+
+**Verified:** Full request/response cycle tested via curl: `/run` +
+`/stream` produces a `stats` object matching the actual observation
+counts (5/7 before, 7/7 after on `benchmarks/Middle.py`/`middle1`,
+matching which tests flipped from FAILED to PASSED), `/download/<id>.csv`
+returns the matching per-test table, and a nonexistent run_id 404s.
+Confirmed the redesigned page still renders as valid HTML (strict
+tag-balance check) with syntactically valid embedded JS (`node --check`).
+README claims cross-checked against the actual `patterns.db` schema,
+`cli.py`'s real flags, and `Tracer.py`'s real tracing mechanism rather
+than carried over from the old document.
+
+---
+
 ## Fix a malformed mined hypothesis aborting the whole generator, not just itself
 
 **Module:** `model/HypothesisTester.py`

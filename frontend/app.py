@@ -32,12 +32,15 @@ indefinitely in this UI. cli.py runs on the main thread and does not
 have this limitation.
 """
 import ast
+import csv
+import io
 import json
 import logging
 import os
 import queue
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from textwrap import dedent
@@ -67,6 +70,7 @@ import cli  # runs cli.load_settings(), wiring DebugController.APP_SETTINGS
 import config as DebugController
 import logger as AbinLogging
 from AbinModel import AbinModel, parse_csv_data
+from model.core.ModelTester import PassedTest
 from model.HypothesisRefinement import AbductionSchema
 from model.misc.generate_test_cases import DEFAULT_MODELS, PROVIDERS, generate_injectable_test_cases
 
@@ -90,6 +94,39 @@ BENCHMARKS_DIR = RESOURCE_ROOT / "benchmarks"
 
 RUNS = {}  # run_id -> queue.Queue, populated by _execute_run, drained by /stream
 _DONE = object()  # sentinel marking end-of-stream on a run's queue
+
+RUN_RESULTS = {}  # run_id -> CSV text for /download, populated once a run finishes
+_MAX_STORED_RESULTS = 30  # bounds memory for a long-lived local session
+
+
+def _outcome_label(observation, index: int) -> str:
+    """ 'PASSED'/'FAILED' for observation[index], or '' if that index
+    doesn't exist (the run never got that far -- e.g. AI test generation
+    or AbinModel setup failed before any test executed).
+
+    Observations are positional (same order/length as the test suite
+    DataFrame), not name-keyed: a test that never got to execute is
+    recorded with the generic name 'UndefinedTest', so correlating by
+    name would collide multiple real tests into one row. Index is the
+    only reliable join key.
+    :rtype: str
+    """
+    if not observation or index >= len(observation):
+        return ""
+    return "PASSED" if observation[index][1] is PassedTest else "FAILED"
+
+
+def _build_results_csv(test_ids, prev_observation, new_observation) -> str:
+    """ Renders a before/after pass-fail table as CSV text, joining
+    purely by position (see _outcome_label).
+    :rtype: str
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["test_case", "before", "after"])
+    for i, test_id in enumerate(test_ids):
+        writer.writerow([test_id, _outcome_label(prev_observation, i), _outcome_label(new_observation, i)])
+    return buf.getvalue()
 
 
 def resolve_path(raw: str) -> str:
@@ -150,6 +187,7 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
     prev_level = logger_obj.level
     logger_obj.addHandler(handler)
     logger_obj.setLevel(logging.INFO)  # force visibility for the live terminal, regardless of .env LOG_LEVEL
+    start_time = time.time()
     try:
         model_path = resolve_path(form.get("model", ""))
         tests_path = resolve_path(form.get("tests", ""))
@@ -217,6 +255,25 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
         else:
             result = {"status": "failed",
                       "message": "UNABLE TO REPAIR. No candidate hypotheses passed the test suite.", "code": None}
+
+        test_ids = test_cases["test_cases"].tolist()
+        before_passed = sum(1 for i in range(len(test_ids)) if _outcome_label(prev_observation, i) == "PASSED")
+        after_passed = sum(1 for i in range(len(test_ids)) if _outcome_label(new_observation, i) == "PASSED")
+        result["stats"] = {
+            "function": func_name,
+            "complexity": complexity,
+            "schema": schema,
+            "hypotheses_tried": abin.abduction_breadth,
+            "duration_seconds": round(time.time() - start_time, 2),
+            "before_passed": before_passed,
+            "after_passed": after_passed,
+            "total_tests": len(test_ids),
+            "download_url": f"/download/{run_id}.csv",
+        }
+        if len(RUN_RESULTS) >= _MAX_STORED_RESULTS:
+            RUN_RESULTS.pop(next(iter(RUN_RESULTS)))
+        RUN_RESULTS[run_id] = _build_results_csv(test_ids, prev_observation, new_observation)
+
         q.put("RESULT::" + json.dumps(result))
     finally:
         logger_obj.removeHandler(handler)
@@ -273,6 +330,18 @@ def stream(run_id):
         RUNS.pop(run_id, None)
 
     return Response(generate(), mimetype="text/event-stream")
+
+
+@app.route("/download/<run_id>.csv", methods=["GET"])
+def download(run_id):
+    csv_text = RUN_RESULTS.get(run_id)
+    if csv_text is None:
+        return jsonify({"error": "unknown or expired run_id"}), 404
+    return Response(
+        csv_text,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="abindebugger_{run_id[:8]}.csv"'},
+    )
 
 
 if __name__ == "__main__":

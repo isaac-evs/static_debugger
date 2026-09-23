@@ -71,6 +71,34 @@
     }
     .layout .panel:nth-child(2) { animation-delay: 0.08s; }
 
+    .results-panel {
+      max-width: 1160px; margin: 1.25rem auto 0;
+      display: none;
+    }
+    .results-panel.visible { display: block; animation: fade-up 0.4s ease both; }
+    .stats-grid { display: flex; gap: 0.9rem; flex-wrap: wrap; }
+    .stat-card {
+      flex: 1; min-width: 150px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 0.85rem 1rem;
+    }
+    .stat-card-wide { flex: 2; min-width: 220px; }
+    .stat-label {
+      display: block; font-size: 0.7rem; font-weight: 700; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .stat-value { display: block; font-size: 1.4rem; font-weight: 700; margin-top: 0.25rem; }
+    .bar-row { display: flex; align-items: center; gap: 0.55rem; margin-top: 0.5rem; }
+    .bar-tag { font-size: 0.72rem; color: var(--text-dim); width: 40px; flex: none; }
+    .bar { flex: 1; height: 6px; background: var(--border); border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; width: 0; border-radius: 4px; transition: width 0.6s ease; }
+    .bar-fill.before { background: #f59e0b; }
+    .bar-fill.after { background: var(--success); }
+    .bar-count { font-size: 0.75rem; font-weight: 600; width: 40px; flex: none; text-align: right; }
+    .download-link {
+      display: inline-block; margin-top: 1.1rem; text-decoration: none;
+    }
+
     h2 { font-size: 0.95rem; font-weight: 600; margin: 0 0 1rem; }
 
     label {
@@ -260,6 +288,38 @@
     </div>
   </div>
 
+  <div class="panel results-panel" id="results-panel">
+    <h2>Results</h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Status</span>
+        <span class="stat-value" id="stat-status">&mdash;</span>
+      </div>
+      <div class="stat-card stat-card-wide">
+        <span class="stat-label">Tests passing</span>
+        <div class="bar-row">
+          <span class="bar-tag">Before</span>
+          <div class="bar"><div class="bar-fill before" id="bar-before"></div></div>
+          <span class="bar-count" id="bar-before-count">&mdash;</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-tag">After</span>
+          <div class="bar"><div class="bar-fill after" id="bar-after"></div></div>
+          <span class="bar-count" id="bar-after-count">&mdash;</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Hypotheses tried</span>
+        <span class="stat-value" id="stat-hypotheses">&mdash;</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Duration</span>
+        <span class="stat-value" id="stat-duration">&mdash;</span>
+      </div>
+    </div>
+    <a id="download-link" class="btn-ghost download-link" href="#" download>Download results (CSV)</a>
+  </div>
+
   <div class="modal-backdrop" id="modal-backdrop">
     <div class="modal">
       <h3>AI test generation</h3>
@@ -391,6 +451,30 @@
         terminal.appendChild(pre);
         terminal.scrollTop = terminal.scrollHeight;
       }
+      if (result.stats) showResults(result.status, result.stats);
+    }
+
+    const STATUS_LABELS = {success: 'Repaired', failed: 'Not repaired', valid: 'No defect found'};
+
+    function showResults(status, stats) {
+      document.getElementById('stat-status').textContent = STATUS_LABELS[status] || status;
+      document.getElementById('stat-hypotheses').textContent = stats.hypotheses_tried;
+      document.getElementById('stat-duration').textContent = stats.duration_seconds + 's';
+
+      const total = stats.total_tests || 1;
+      const beforePct = (stats.before_passed / total) * 100;
+      const afterPct = (stats.after_passed / total) * 100;
+      document.getElementById('bar-before').style.width = beforePct + '%';
+      document.getElementById('bar-after').style.width = afterPct + '%';
+      document.getElementById('bar-before-count').textContent = `${stats.before_passed}/${stats.total_tests}`;
+      document.getElementById('bar-after-count').textContent = `${stats.after_passed}/${stats.total_tests}`;
+
+      document.getElementById('download-link').href = stats.download_url;
+
+      const panel = document.getElementById('results-panel');
+      panel.classList.remove('visible');
+      void panel.offsetWidth; // restart the fade-up animation on repeated runs
+      panel.classList.add('visible');
     }
 
     function setRunning(running) {
@@ -402,6 +486,7 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       terminal.innerHTML = '';
+      document.getElementById('results-panel').classList.remove('visible');
       setRunning(true);
 
       try {

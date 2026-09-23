@@ -1,61 +1,159 @@
-# AbinDebugger Architecture
+# AbinDebugger
 
-This document outlines the system architecture of `AbinDebugger`, a high-performance, robust, and extensible automated program repair platform. 
+AbinDebugger automatically finds and fixes bugs in Python functions.
 
----
+You give it: a Python file with a broken function, and a set of test cases
+(inputs plus the output each one *should* produce). It runs your tests,
+figures out which line is most likely to blame, tries a series of small
+edits at that line, and re-runs your tests after each one. If an edit
+makes every test pass, that's your fix.
 
-## 1. Design Philosophy:
+No AI is required for the core repair engine to work -- it's driven by a
+local database of patterns mined from real bug-fix commits on GitHub. AI
+(Claude, ChatGPT, or Gemini) is used only for one optional feature:
+generating extra test cases for you.
 
-* **Test in RAM:** Candidate fixes are evaluated entirely inside virtual memory without ever touching the hard drive.
-* **Self-Contained:** The platform requires zero external background services or daemons, utilizing embedded storage for maximum portability.
-* **Modular Design:** Built around a headless, event-driven pipeline, allowing intelligent modules (like AI-Assisted Test Generation or LLM Code Reviewers) to integrate via standard I/O with zero friction.
+## Is this for me?
 
----
+If you've never touched this project before, here's the fastest way to
+see what it does, no coding required:
 
-## 2. Core Architectural Pillars
+1. Someone hands you a double-click app (`AbinDebugger.app` on macOS,
+   `AbinDebugger.exe` on Windows) -- open it. See
+   [`frontend/DESKTOP_APP.md`](frontend/DESKTOP_APP.md) if you need to
+   build that app yourself.
+2. In the window that opens, leave the dropdowns on their defaults
+   (they're pre-loaded with a small example) and click **Run debugger**.
+3. Watch the live output on the right. Within a few seconds it either
+   finds a fix or tells you it couldn't.
 
-### Pillar A: Pure In-Memory Sandboxing
-Instead of utilizing OS-level file loaders for patch evaluation, the engine manipulates Python syntax trees (ASTs) strictly in memory. Candidate ASTs are compiled directly to bytecode (`compile()`) and executed inside isolated virtual namespaces. 
-* **Advantage:** Eliminates file overwriting race conditions, prevents `sys.modules` contamination, and allows the engine to evaluate hundreds of candidate repairs per second safely.
+That's the whole idea. Everything below is for running it from source
+instead of the packaged app.
 
-### Pillar B: Portable Embedded Storage
-Pattern storage and retrieval are handled by an embedded **SQLite JSONB** database (`repair_knowledge.db`).
-* **Advantage:** The entire repair database is a single, portable local file. A user or CI/CD runner can install the tool and immediately repair code offline without configuring or authenticating a background document database.
+## What's actually happening (in plain terms)
 
-### Pillar C: Low-Overhead SBL Tracing
-Fault localization tracks code coverage at near-native interpreter execution speeds by utilizing modern Python 3.12+ **`sys.monitoring`** (PEP 669), bypassing the massive execution penalties associated with legacy `sys.settrace` hooks.
+1. **Run the tests.** Some pass, some fail. That tells the tool the
+   function is broken *and* gives it concrete examples of what "fixed"
+   looks like.
+2. **Guess which line is suspicious.** Lines that only run during
+   *failing* tests are more suspicious than lines that run during every
+   test. This ranking method is called Ochiai, a standard technique in
+   automated debugging research.
+3. **Try small edits at that line.** Rather than guessing randomly, it
+   looks up how similar-looking buggy lines were actually fixed in real
+   GitHub commits (a local database of ~31,000 mined bug-fix patterns),
+   and tries edits shaped like those fixes.
+4. **Re-run the tests after each edit.** If an edit makes every test
+   pass, that edit is the fix. If it makes things worse, it's discarded.
+   If it's an improvement but not a full fix, the tool recurses and
+   tries further edits on top of it.
 
----
+All of this happens in memory -- candidate code is compiled and executed
+in an isolated namespace, nothing is written to disk during the search.
 
-## 3. High-Level Architecture Diagram
+## Three ways to use it
 
-```mermaid
-graph TD
-    classDef core fill:#4f46e5,stroke:#312e81,stroke-width:2px,color:#fff;
-    classDef plugin fill:#0d9488,stroke:#115e59,stroke-width:2px,color:#fff;
-    classDef storage fill:#d97706,stroke:#92400e,stroke-width:2px,color:#fff;
+| Way | Who it's for | Where |
+|---|---|---|
+| **Desktop app** | Anyone, no setup | Double-click `AbinDebugger.app`/`.exe` -- see [`frontend/DESKTOP_APP.md`](frontend/DESKTOP_APP.md) |
+| **Web interface** | Comfortable with a terminal, wants a UI | `python3 frontend/app.py`, then open the URL it prints |
+| **Command line** | Scripting, CI, automation | `python3 cli.py --model ... --tests ... --func ...` |
 
-    A[Buggy Source Code & Test Suite] --> B(Engine Orchestrator)
-    B --> C{1. Fault Localization Engine}
-    
-    subgraph Storage Hub
-        DB[(SQLite Pattern Knowledge Base)]:::storage
-    end
+All three run the exact same repair engine underneath -- pick whichever
+fits how you like to work.
 
-    C -->|Flagged Lines & AST Context| D{2. Hypothesis Generation Hub}
-    
-    subgraph Plug-and-Play Generators
-        D1[AST Search & Abduction Engine]:::plugin
-        D2[AI / LLM Patch Generator Plugin]:::plugin
-        D3[AI Test Case Generator Plugin]:::plugin
-    end
+## Installation (running from source)
 
-    DB <--> D1
-    D <--> D1 & D2 & D3
+Requires Python 3.12+.
 
-    D -->|Candidate Patches in RAM| E{3. In-Memory Flight Simulator}
-    E -->|Run Virtual Tests| F{Passed Baseline Consistency?}
-    
-    F -->|No: Regressed Baseline| D
-    F -->|Yes: Valid Repair| G[Verified Repaired Program]
+```bash
+git clone <this repo>
+cd static_debugger
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
+
+## Trying it out
+
+The `benchmarks/` folder has ready-to-use examples: a buggy `.py` file
+paired with a `.csv` test suite for each one. `Middle.py` (find the
+middle of three numbers) is the simplest one to start with.
+
+**Command line:**
+
+```bash
+python3 cli.py --model benchmarks/Middle.py --tests benchmarks/Middle.csv --func middle1
+```
+
+**Web interface:**
+
+```bash
+python3 frontend/app.py
+```
+
+Then open the address it prints (usually `http://127.0.0.1:5000`). The
+model/tests dropdowns auto-populate from `benchmarks/`, and the function
+dropdown auto-populates from whichever model file you pick.
+
+### Writing your own test suite
+
+A test CSV needs a `test_cases` column, an `expected_output` column, and
+one column per function parameter named `paramname: type` (supported
+types: `int`, `float`, `str`, `list`, `dict`). See any file in
+`benchmarks/*.csv` for the exact shape.
+
+### Command-line flags
+
+```
+--model PATH         Path to the .py file with the defective function
+--tests PATH          Path to the .csv test suite
+--func NAME            Name of the function to debug
+--complexity N        Max size of a candidate fix (default: 3)
+--schema DFS|BFS|A_STAR  Search strategy (default: DFS)
+--mine owner/repo      Mine bug-fix patterns from a GitHub repo into the local database, instead of debugging
+```
+
+## AI-assisted test case generation (optional)
+
+If you don't have a test suite yet, both the CLI and web interface can
+generate one for you with an LLM (Claude, ChatGPT, or Gemini) -- it reads
+the target function's signature and docstring and writes test cases for
+what the function is *supposed* to do (not what the current, possibly
+buggy code happens to do).
+
+This needs an API key for whichever provider you use. Copy `.env.example`
+to `.env` and fill in the key(s) you have:
+
+```bash
+cp .env.example .env
+# then edit .env and paste in ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+```
+
+CLI: `--generate-ai-tests N` (how many cases), `--ai-provider`, `--ai-model`.
+Web interface: click **Configure…** next to "AI-generated test cases" to
+pick a provider, model, and (optionally) paste a key just for that run
+instead of using `.env`.
+
+## Project layout
+
+```
+cli.py                    Command-line entry point
+frontend/app.py           Web interface (Flask)
+frontend/desktop.py       Desktop app launcher (wraps the web interface in a native window)
+frontend/AbinDebugger.spec  Packaging config for the double-click app (PyInstaller)
+AbinModel.py               Orchestrates one debugging run
+model/                     The repair engine (fault localization, hypothesis generation/testing, evaluation)
+model/misc/generate_test_cases.py  AI test case generation
+benchmarks/                Example buggy programs + test suites
+patterns.db                 Local database of mined bug-fix patterns the search draws from
+```
+
+## License
+
+GNU GPLv3 -- see [`LICENSE.md`](LICENSE.md).
+
+## More detail
+
+`CHANGELOG.md` has a running log of notable changes with the reasoning
+behind each one, if you want the history of how this project got here.
