@@ -254,6 +254,7 @@
       <div class="term-head">
         <h2>Live output</h2>
         <span class="live-dot" id="live-dot"></span>
+        <button type="button" class="btn-ghost" id="copy-btn">Copy</button>
       </div>
       <div id="terminal" class="terminal"><span class="placeholder">Run the debugger to see live output here.</span></div>
     </div>
@@ -293,6 +294,14 @@
     const runBtn = document.getElementById('run-btn');
     const terminal = document.getElementById('terminal');
     const liveDot = document.getElementById('live-dot');
+    const copyBtn = document.getElementById('copy-btn');
+
+    copyBtn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(terminal.innerText);
+      const original = copyBtn.textContent;
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = original; }, 1200);
+    });
 
     async function refreshFunctions() {
       funcSelect.innerHTML = '';
