@@ -1,0 +1,12 @@
+# Packaging-time only -- not needed to run the app from source (see
+# requirements.txt for that). Used to build the double-click desktop app:
+#
+#   pip install -r requirements.txt -r requirements-desktop.txt
+#   pyinstaller frontend/AbinDebugger.spec --noconfirm
+#
+# See .github/workflows/build-desktop.yml for automated macOS + Windows
+# builds (PyInstaller does not cross-compile -- each OS's build must run
+# on that OS).
+pywebview>=6.0
+pyinstaller>=6.0
+pythonnet>=3.0; sys_platform == "win32"  # pywebview's Windows (EdgeChromium/WebView2) backend

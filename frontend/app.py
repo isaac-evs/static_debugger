@@ -7,13 +7,19 @@ target functions are auto-detected instead of typed in, and the run
 streams live progress into an in-page terminal panel instead of a
 separate results page.
 
-Can be started from anywhere -- it chdirs to the project root itself,
+Can be started from anywhere -- it chdirs to a fixed directory itself,
 so form paths and config.py's relative paths (e.g. SQLITE_DB_PATH)
 resolve consistently either way:
 
     python3 frontend/app.py
     # or
     cd frontend && python3 app.py
+
+When frozen into a desktop app with PyInstaller (see desktop.py), bundled
+resources (templates/, benchmarks/) are read from the extracted bundle
+(sys._MEIPASS), which is often read-only and wiped between launches, so
+writable state (patterns.db) instead lives under ~/.abindebugger. Running
+from source, both are just the project root, unchanged from before.
 
 Caveat: the repair run executes in a background thread so it can stream
 live while the request/response cycle stays free for the browser's SSE
@@ -36,25 +42,43 @@ import uuid
 from pathlib import Path
 from textwrap import dedent
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-os.chdir(PROJECT_ROOT)  # config.py's relative paths (e.g. SQLITE_DB_PATH)
-                         # and cli.py's convention both assume cwd == project
-                         # root; enforce that regardless of where this was
-                         # launched from. (Requires use_reloader=False below --
-                         # Werkzeug's reloader re-execs using a relative script
-                         # path that breaks once cwd has moved.)
+if getattr(sys, "frozen", False):
+    # Inside a PyInstaller bundle: bundled data files (templates/,
+    # benchmarks/) live under the extraction root, not next to this file.
+    RESOURCE_ROOT = Path(sys._MEIPASS)
+    DATA_DIR = Path.home() / ".abindebugger"  # writable, persists across launches
+else:
+    RESOURCE_ROOT = Path(__file__).resolve().parent.parent
+    DATA_DIR = RESOURCE_ROOT
+
+sys.path.insert(0, str(RESOURCE_ROOT))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+os.chdir(DATA_DIR)  # config.py's relative paths (e.g. SQLITE_DB_PATH) and
+                     # cli.py's convention both assume cwd == a fixed,
+                     # writable directory; enforce that regardless of where
+                     # this was launched from. (Requires use_reloader=False
+                     # below -- Werkzeug's reloader re-execs using a relative
+                     # script path that breaks once cwd has moved.)
 
 import pandas as pd
 from flask import Flask, Response, jsonify, render_template, request
 
-import cli  # noqa: F401 -- import runs cli.load_settings(), wiring DebugController.APP_SETTINGS
+import cli  # runs cli.load_settings(), wiring DebugController.APP_SETTINGS
+import config as DebugController
 import logger as AbinLogging
 from AbinModel import AbinModel, parse_csv_data
 from model.HypothesisRefinement import AbductionSchema
 from model.misc.generate_test_cases import DEFAULT_MODEL, generate_injectable_test_cases
 
-app = Flask(__name__)
+# patterns.db (the mined bug-fix pattern database HypothesisGenerator reads
+# from -- read-only outside of cli.py --mine) ships as a bundled resource,
+# not writable state, so it must resolve against RESOURCE_ROOT regardless of
+# cwd/DATA_DIR. cli.load_settings()'s fallback leaves this as a bare
+# relative "patterns.db", which would otherwise silently resolve to an
+# empty DB under DATA_DIR and starve the search of every learned pattern.
+DebugController.APP_SETTINGS["SQLITE_DB_PATH"] = str(RESOURCE_ROOT / "patterns.db")
+
+app = Flask(__name__, template_folder=str(RESOURCE_ROOT / "frontend" / "templates"))
 
 SCHEMA_MAP = {
     "DFS": AbductionSchema.DFS,
@@ -62,20 +86,20 @@ SCHEMA_MAP = {
     "A_STAR": AbductionSchema.A_star,
 }
 
-BENCHMARKS_DIR = PROJECT_ROOT / "benchmarks"
+BENCHMARKS_DIR = RESOURCE_ROOT / "benchmarks"
 
 RUNS = {}  # run_id -> queue.Queue, populated by _execute_run, drained by /stream
 _DONE = object()  # sentinel marking end-of-stream on a run's queue
 
 
 def resolve_path(raw: str) -> str:
-    """ Resolves a form path against the project root, not the process's
-    cwd -- so "benchmarks/Middle.py" works the same whether the server
-    was started from the project root or from inside frontend/.
+    """ Resolves a form path against the bundled resource root, not the
+    process's cwd -- so "benchmarks/Middle.py" works the same whether
+    running from source (any launch directory) or from a frozen build.
     :rtype: str
     """
     path = Path(raw)
-    return str(path if path.is_absolute() else PROJECT_ROOT / path)
+    return str(path if path.is_absolute() else RESOURCE_ROOT / path)
 
 
 def list_benchmark_files():

@@ -3,6 +3,60 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Add a packaged desktop app (PyInstaller + pywebview) for non-technical users
+
+**Module:** `frontend/desktop.py` (new), `frontend/AbinDebugger.spec` (new), `frontend/app.py`, `.github/workflows/build-desktop.yml` (new), `requirements-desktop.txt` (new)
+
+**Description:** Wraps the existing Flask frontend in a native window via
+`pywebview` (`frontend/desktop.py`) and packages it with PyInstaller into
+a double-click app for macOS (`AbinDebugger.app`) and Windows
+(`AbinDebugger.exe`) &mdash; no Python, no terminal, no `pip install`.
+Considered a Rust rewrite and an async (FastAPI) rewrite first and
+rejected both: neither addresses the actual problem, which is
+distribution/launch friction for a non-technical user, not runtime
+performance; a Rust rewrite would mean reimplementing the entire
+AST-based fault localization/search engine for zero functional gain.
+PyInstaller bundles the unmodified Python app as-is.
+
+`app.py` now distinguishes a read-only bundled resource root
+(templates, `benchmarks/`, `patterns.db`) from a writable per-user data
+directory (`~/.abindebugger`, for anything written at runtime), since a
+frozen bundle can be read-only and gets wiped/re-extracted between
+launches. `patterns.db`'s path is now set explicitly to the resource
+root rather than relying on cwd-relative resolution.
+
+**Impact:** Building and running the frozen app initially produced a
+*worse* result than `cli.py`/the source frontend on the same
+`benchmarks/Middle.py` input (`UNABLE TO REPAIR` instead of a
+successful fix, with "Total Number of Hypotheses Generated: 0"): the
+frozen app's fresh, empty `~/.abindebugger/patterns.db` silently
+replaced the real 87MB, 31,402-row mined bug-fix pattern database at
+the project root, starving `HypothesisGenerator` of every learned
+pattern. Fixed by bundling `patterns.db` as a read-only resource
+(confirmed via `HypothesisGenerator.py` it's SELECT-only outside of
+`cli.py --mine`) and pointing `SQLITE_DB_PATH` at it explicitly.
+
+**Fix:** Running the repair on a background thread (already true of the
+live-terminal frontend) still means AbinModel's signal-based per-test
+timeout doesn't reliably protect this UI, same caveat as before &mdash;
+documented in `frontend/DESKTOP_APP.md` for the non-technical end user
+too, not just the docstring.
+
+**Verified:** Built `dist/AbinDebugger.app` on macOS via
+`pyinstaller frontend/AbinDebugger.spec`, launched it standalone (not
+from a dev shell), confirmed via `lsof` it opened a real native window
+and bound its own local port, confirmed `cwd` was the writable
+`~/.abindebugger` (not the read-only bundle) via the running process's
+open file table, and drove a full `/run` + `/stream` request against
+the frozen app's own server: identical successful repair on
+`benchmarks/Middle.py`/`middle1` as `cli.py` and the source frontend.
+Windows build is configured via `.github/workflows/build-desktop.yml`
+(PyInstaller doesn't cross-compile) but not run here &mdash; needs
+verification on an actual Windows machine or the CI job before handing
+to the PI.
+
+---
+
 ## Frontend: auto-detected inputs, in-page API key, live streaming terminal
 
 **Module:** `frontend/app.py`, `frontend/templates/index.html`, `model/misc/generate_test_cases.py`
