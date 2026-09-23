@@ -1,11 +1,22 @@
 name: Build desktop app
 
 # PyInstaller doesn't cross-compile, so macOS and Windows builds each run
-# on that OS. Manually triggered (Actions tab -> Run workflow) rather than
-# on every push, since these builds are slow and only needed when handing
-# a new build to a non-technical user.
+# on that OS.
+#
+# Two ways to trigger this:
+#   - Actions tab -> "Build desktop app" -> Run workflow: builds both and
+#     attaches them as downloadable workflow artifacts only (no Release).
+#   - Push a tag matching v* (e.g. `git tag v1.0.0 && git push origin v1.0.0`):
+#     builds both AND publishes/updates a GitHub Release for that tag with
+#     the two zipped builds attached.
 on:
   workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # needed to create/update a Release on a tag push
 
 jobs:
   build:
@@ -13,11 +24,9 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact-path: dist/AbinDebugger.app
-            artifact-name: AbinDebugger-macOS
+            asset-name: AbinDebugger-macOS.zip
           - os: windows-latest
-            artifact-path: dist/AbinDebugger
-            artifact-name: AbinDebugger-Windows
+            asset-name: AbinDebugger-Windows.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +43,25 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller frontend/AbinDebugger.spec --noconfirm
 
+      - name: Zip build (macOS)
+        if: runner.os == 'macOS'
+        run: cd dist && zip -r -y "../${{ matrix.asset-name }}" AbinDebugger.app
+
+      - name: Zip build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/AbinDebugger -DestinationPath ${{ matrix.asset-name }}
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.artifact-path }}
+          name: ${{ matrix.asset-name }}
+          path: ${{ matrix.asset-name }}
+
+      - name: Publish to release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes || true
+          gh release upload "${{ github.ref_name }}" "${{ matrix.asset-name }}" --clobber
