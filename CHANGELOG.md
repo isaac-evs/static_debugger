@@ -3,6 +3,54 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Add ChatGPT/Gemini as AI test generation providers, redesign the frontend
+
+**Module:** `model/misc/generate_test_cases.py`, `cli.py`, `frontend/app.py`, `frontend/templates/index.html`, `frontend/AbinDebugger.spec`, `requirements.txt`, `.env.example`
+
+**Description:** AI-generated test cases were Claude-only. Added OpenAI
+(ChatGPT) and Google (Gemini) as alternative providers, all normalized
+to the same structured `TestCaseSuite` Pydantic output:
+`client.beta.chat.completions.parse(response_format=...)` for OpenAI,
+`client.models.generate_content(config=GenerateContentConfig(response_schema=...))`
+for Gemini. `generate_test_cases()`/`generate_injectable_test_cases()`
+now take a `provider` argument (`'anthropic' | 'openai' | 'gemini'`,
+default `'anthropic'` for backward compatibility) alongside `model`,
+threaded through `cli.py`'s new `--ai-provider` flag and the frontend.
+
+Replaced the plain "Claude model" text field with a modal dialog
+(provider cards + model field + API key field) opened via a
+"Configure…" button next to the AI-test-case count, instead of a bare
+inline field &mdash; matches the request for a more interactive
+picker. The whole frontend was also restyled: minimalist, Render.com-inspired
+(soft shadows, rounded corners, indigo accent, generous whitespace) with
+small animations (panel fade-in, modal scale/fade transition, terminal
+lines fading in, a pulsing "live" dot while a run is active) &mdash; no
+new JS dependencies, still vanilla JS/CSS.
+
+**Impact:** N/A (new capability + visual redesign, no behavior change
+for existing Claude-only usage).
+
+**Fix:** N/A. Current model IDs for fast-moving providers are inherently
+best-effort (`DEFAULT_MODELS` in `generate_test_cases.py`, verified via
+web search at the time of writing rather than guessed) &mdash; the
+model field is always user-editable in both the CLI and the modal, and
+a code comment flags this explicitly.
+
+**Verified:** Anthropic path re-verified live end-to-end after the
+provider-dispatch refactor (real API call, real generated test cases).
+OpenAI and Gemini paths verified structurally &mdash; both fail at
+exactly the same "missing API key" point Anthropic did before a key was
+configured, confirming the call path is correct up to the actual
+request; not live-verified against real OpenAI/Gemini accounts since no
+keys for those are available here. Confirmed the redesigned
+`index.html` renders (200, well-formed HTML via a strict tag-balance
+check) and its extracted `<script>` passes `node --check` (valid JS,
+not just balanced braces). Rebuilt the PyInstaller desktop app with the
+new dependencies bundled and re-ran the same live end-to-end repair
+against the frozen app's own server &mdash; unaffected.
+
+---
+
 ## Add a packaged desktop app (PyInstaller + pywebview) for non-technical users
 
 **Module:** `frontend/desktop.py` (new), `frontend/AbinDebugger.spec` (new), `frontend/app.py`, `.github/workflows/build-desktop.yml` (new), `requirements-desktop.txt` (new)

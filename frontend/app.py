@@ -68,7 +68,7 @@ import config as DebugController
 import logger as AbinLogging
 from AbinModel import AbinModel, parse_csv_data
 from model.HypothesisRefinement import AbductionSchema
-from model.misc.generate_test_cases import DEFAULT_MODEL, generate_injectable_test_cases
+from model.misc.generate_test_cases import DEFAULT_MODELS, PROVIDERS, generate_injectable_test_cases
 
 # patterns.db (the mined bug-fix pattern database HypothesisGenerator reads
 # from -- read-only outside of cli.py --mine) ships as a bundled resource,
@@ -157,7 +157,8 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
         complexity = int(form.get("complexity") or 3)
         schema = form.get("schema", "DFS")
         num_ai_tests = int(form.get("generate_ai_tests") or 0)
-        ai_model = form.get("ai_model") or DEFAULT_MODEL
+        ai_provider = form.get("ai_provider") or "anthropic"
+        ai_model = form.get("ai_model") or DEFAULT_MODELS.get(ai_provider)
         api_key = form.get("api_key") or None  # never logged, never persisted -- used for this run only
 
         q.put(f"Loading test suite from {tests_path}...")
@@ -184,13 +185,14 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
 
         if num_ai_tests > 0:
             param_types = dict(zip(parsed_types["input_args"], parsed_types["type"]))
-            q.put(f"Generating {num_ai_tests} AI-authored test case(s) via {ai_model}...")
+            q.put(f"Generating {num_ai_tests} AI-authored test case(s) via {ai_provider}/{ai_model}...")
             try:
                 ai_tests = generate_injectable_test_cases(
                     source_path=model_path,
                     function_name=func_name,
                     param_types=param_types,
                     num_cases=num_ai_tests,
+                    provider=ai_provider,
                     model=ai_model,
                     api_key=api_key,
                 )
@@ -225,7 +227,13 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
 @app.route("/", methods=["GET"])
 def index():
     models, tests = list_benchmark_files()
-    return render_template("index.html", ai_model_default=DEFAULT_MODEL, models=models, tests=tests)
+    return render_template(
+        "index.html",
+        models=models,
+        tests=tests,
+        providers=PROVIDERS,
+        default_models=DEFAULT_MODELS,
+    )
 
 
 @app.route("/functions", methods=["GET"])

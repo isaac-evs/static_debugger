@@ -37,10 +37,11 @@ your PC" for the same reason (unsigned) -- click **More info**, then
 **Run anyway**. Only needed once.
 
 After that, a window opens with the same form/live-terminal UI as the
-browser version. No install step, nothing else to configure. The optional
-"Anthropic API key" field is where they'd paste a key if you want them to
-use AI-generated test cases -- otherwise they can leave it blank and use
-the debugger with the built-in example benchmarks as-is.
+browser version. No install step, nothing else to configure. Clicking
+"Configure…" next to AI-generated test cases opens a small dialog to pick
+a provider (Claude, ChatGPT, or Gemini) and paste an API key for that run --
+otherwise they can leave it at 0 and use the debugger with the built-in
+example benchmarks as-is.
 
 ## Known limitations
 

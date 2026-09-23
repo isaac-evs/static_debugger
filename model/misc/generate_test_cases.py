@@ -4,8 +4,11 @@ function, in the exact format `AbinModel.parse_csv_data` (and the
 `benchmarks/*.csv` files) expect: a `test_cases`/`expected_output` pair
 of columns plus one `paramName: type` column per function parameter.
 
-The Claude API key is read from the ANTHROPIC_API_KEY environment
-variable (see `.env`).
+Supports three providers -- Anthropic (Claude), OpenAI (ChatGPT), and
+Google (Gemini) -- all normalized to the same structured `TestCaseSuite`
+output. Each provider's API key is read from its usual environment
+variable (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY, see
+`.env`) or can be passed in explicitly per call (e.g. from the frontend).
 
 Design note: the LLM is asked to reason about what the function's name,
 signature, and docstring say it *should* do, and to derive
@@ -23,15 +26,31 @@ from typing import Dict, List, Tuple
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-load_dotenv(override=True)  # .env's ANTHROPIC_API_KEY wins over a blank/stale shell var
+load_dotenv(override=True)  # .env's *_API_KEY vars win over blank/stale shell vars
 
 import anthropic
 import pandas as pd
+from google import genai
+from google.genai import types as genai_types
+from openai import OpenAI
 
 # Kept in sync with the castType branches in AbinModel.parse_csv_data.
 SUPPORTED_CAST_TYPES = {'int', 'float', 'str', 'list', 'dict'}
 
-DEFAULT_MODEL = "claude-opus-5"
+PROVIDERS = ('anthropic', 'openai', 'gemini')
+
+DEFAULT_MODELS = {
+    'anthropic': 'claude-opus-5',
+    'openai': 'gpt-5.1',
+    'gemini': 'gemini-3.1-pro-preview',
+}
+# Model IDs move fast -- these are current as of this writing but not
+# guaranteed to stay valid. The frontend and --model always let you
+# override them; if a request 404s on "model not found", check that
+# provider's docs for its current model ID.
+
+# Backward-compatible alias -- generate_test_cases.py's original single-provider default.
+DEFAULT_MODEL = DEFAULT_MODELS['anthropic']
 
 
 class GeneratedTestCase(BaseModel):
@@ -161,19 +180,70 @@ def build_injectable_dataframe(suite: TestCaseSuite, params: List[str], param_ty
     return pd.DataFrame(rows, columns=columns)
 
 
+def _call_anthropic(prompt: str, model: str, api_key: str = None) -> TestCaseSuite:
+    """ :rtype: TestCaseSuite """
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    response = client.messages.parse(
+        model=model,
+        max_tokens=8000,
+        thinking={"type": "adaptive"},
+        messages=[{"role": "user", "content": prompt}],
+        output_format=TestCaseSuite,
+    )
+    return response.parsed_output
+
+
+def _call_openai(prompt: str, model: str, api_key: str = None) -> TestCaseSuite:
+    """ :rtype: TestCaseSuite """
+    client = OpenAI(api_key=api_key) if api_key else OpenAI()
+    completion = client.beta.chat.completions.parse(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        response_format=TestCaseSuite,
+    )
+    return completion.choices[0].message.parsed
+
+
+def _call_gemini(prompt: str, model: str, api_key: str = None) -> TestCaseSuite:
+    """ :rtype: TestCaseSuite """
+    client = genai.Client(api_key=api_key) if api_key else genai.Client()
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=TestCaseSuite,
+        ),
+    )
+    return response.parsed
+
+
+_PROVIDER_CALLS = {
+    'anthropic': _call_anthropic,
+    'openai': _call_openai,
+    'gemini': _call_gemini,
+}
+
+
 def _generate_suite(source_path: str, function_name: str, param_types: Dict[str, str],
-        num_cases: int, model: str, api_key: str = None) -> Tuple[TestCaseSuite, List[str]]:
-    """ Calls Claude to generate a TestCaseSuite for the target function.
+        num_cases: int, provider: str, model: str, api_key: str = None) -> Tuple[TestCaseSuite, List[str]]:
+    """ Calls the given LLM provider to generate a TestCaseSuite for the
+    target function.
 
     Shared by `generate_test_cases()` and `generate_injectable_test_cases()`
     -- they differ only in which shape they render the result into.
 
-    :param api_key: Overrides ANTHROPIC_API_KEY for this call only (e.g. a
-        key entered in the frontend). Never logged or persisted; falls
-        back to the environment/`.env` when omitted.
+    :param provider: One of PROVIDERS ('anthropic', 'openai', 'gemini').
+    :type  provider: str
+    :param api_key: Overrides that provider's API key env var for this
+        call only (e.g. a key entered in the frontend). Never logged or
+        persisted; falls back to the environment/`.env` when omitted.
     :type  api_key: str
     :rtype: Tuple[TestCaseSuite, List[str]]
     """
+    if provider not in _PROVIDER_CALLS:
+        raise ValueError(f"Unknown provider '{provider}'. Supported: {PROVIDERS}.")
+
     path = Path(source_path)
     function_source, params = get_function_source_and_params(path, function_name)
 
@@ -184,33 +254,25 @@ def _generate_suite(source_path: str, function_name: str, param_types: Dict[str,
             f"Supported types: {sorted(SUPPORTED_CAST_TYPES)}."
         )
 
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     prompt = build_prompt(function_source, function_name, params, num_cases)
-
-    response = client.messages.parse(
-        model=model,
-        max_tokens=8000,
-        thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": prompt}],
-        output_format=TestCaseSuite,
-    )
-    return response.parsed_output, params
+    suite = _PROVIDER_CALLS[provider](prompt, model or DEFAULT_MODELS[provider], api_key)
+    return suite, params
 
 
 def generate_injectable_test_cases(source_path: str, function_name: str, param_types: Dict[str, str],
-        num_cases: int = 10, model: str = DEFAULT_MODEL, api_key: str = None) -> pd.DataFrame:
+        num_cases: int = 10, provider: str = 'anthropic', model: str = None, api_key: str = None) -> pd.DataFrame:
     """ Generates an AI-authored test suite ready for
     `AbinModel.inject_tests()` -- same parameters as `generate_test_cases`,
     but returns the parsed (bare-column, typed-value) shape instead of
     the CSV-file shape.
     :rtype: pd.DataFrame
     """
-    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, model, api_key)
+    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, provider, model, api_key)
     return build_injectable_dataframe(suite, params, param_types)
 
 
 def generate_test_cases(source_path: str, function_name: str, param_types: Dict[str, str],
-        num_cases: int = 10, model: str = DEFAULT_MODEL, api_key: str = None) -> pd.DataFrame:
+        num_cases: int = 10, provider: str = 'anthropic', model: str = None, api_key: str = None) -> pd.DataFrame:
     """ Generates an AI-authored test suite for a target function.
 
     :param source_path: Path to the .py file containing the function.
@@ -222,13 +284,15 @@ def generate_test_cases(source_path: str, function_name: str, param_types: Dict[
     :type  param_types: Dict[str, str]
     :param num_cases: Roughly how many test cases to request.
     :type  num_cases: int
-    :param model: The Claude model to use.
+    :param provider: One of PROVIDERS ('anthropic', 'openai', 'gemini').
+    :type  provider: str
+    :param model: The model to use; defaults to DEFAULT_MODELS[provider].
     :type  model: str
-    :param api_key: Overrides ANTHROPIC_API_KEY for this call only.
+    :param api_key: Overrides that provider's API key for this call only.
     :type  api_key: str
     :rtype: pd.DataFrame
     """
-    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, model, api_key)
+    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, provider, model, api_key)
     return build_dataframe(suite, params, param_types)
 
 
@@ -248,11 +312,12 @@ def main() -> None:
     parser.add_argument("types", help="Comma-separated name:type pairs, e.g. 'x:int,y:int,z:int'")
     parser.add_argument("-n", "--num-cases", type=int, default=10)
     parser.add_argument("-o", "--output", default=None, help="Output CSV path (default: <function>.csv)")
-    parser.add_argument("-m", "--model", default=DEFAULT_MODEL)
+    parser.add_argument("-p", "--provider", choices=PROVIDERS, default="anthropic")
+    parser.add_argument("-m", "--model", default=None, help="Defaults to that provider's DEFAULT_MODELS entry")
     args = parser.parse_args()
 
     param_types = dict(pair.split(":") for pair in args.types.split(","))
-    df = generate_test_cases(args.source, args.function, param_types, args.num_cases, args.model)
+    df = generate_test_cases(args.source, args.function, param_types, args.num_cases, args.provider, args.model)
     output_path = args.output or f"{args.function}.csv"
     write_csv(df, output_path)
     print(f"Wrote {len(df)} test cases to {output_path}")

@@ -43,7 +43,7 @@ hiddenimports = [
 # pandas/anthropic/pydantic all do dynamic/optional imports PyInstaller's
 # static analysis can miss -- collect them fully rather than debug missing
 # submodules one at a time.
-for pkg in ("pandas", "anthropic", "pydantic", "pydantic_core"):
+for pkg in ("pandas", "anthropic", "openai", "google.genai", "pydantic", "pydantic_core"):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries

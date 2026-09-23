@@ -2,40 +2,209 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AbinDebugger</title>
   <style>
+    :root {
+      --bg: #fafafa;
+      --panel: #ffffff;
+      --border: #e6e6e9;
+      --text: #171717;
+      --text-dim: #6b6b70;
+      --accent: #5046e5;
+      --accent-hover: #423bc9;
+      --accent-soft: #eeecfd;
+      --success: #16a34a;
+      --failed: #dc2626;
+      --valid: #2563eb;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 1px 2px rgba(16, 16, 20, 0.04), 0 8px 24px rgba(16, 16, 20, 0.06);
+      --shadow-lg: 0 4px 12px rgba(16, 16, 20, 0.08), 0 16px 40px rgba(16, 16, 20, 0.10);
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
     * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; color: #222; margin: 0; padding: 1.5rem; }
-    h1 { font-size: 1.4rem; margin-top: 0; }
-    .layout { display: flex; gap: 1.5rem; align-items: flex-start; max-width: 1200px; margin: 0 auto; }
-    .panel { flex: 1; min-width: 0; }
-    label { display: block; margin-top: 1rem; font-weight: 600; }
-    input, select { width: 100%; padding: 0.4rem; margin-top: 0.25rem; box-sizing: border-box; }
-    .hint { color: #666; font-size: 0.85rem; margin-top: 0.15rem; }
-    .row { display: flex; gap: 1rem; }
+
+    body {
+      font-family: var(--sans);
+      color: var(--text);
+      background: var(--bg);
+      margin: 0;
+      padding: 2rem 1.5rem;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .topbar {
+      max-width: 1160px;
+      margin: 0 auto 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      animation: fade-down 0.5s ease both;
+    }
+    .logo-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+    .topbar h1 { font-size: 1.1rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+    .topbar .tag {
+      margin-left: auto; font-size: 0.75rem; color: var(--text-dim);
+      background: var(--panel); border: 1px solid var(--border);
+      padding: 0.25rem 0.6rem; border-radius: 999px;
+    }
+
+    .layout {
+      display: flex; gap: 1.25rem; align-items: flex-start;
+      max-width: 1160px; margin: 0 auto;
+    }
+    .panel {
+      flex: 1; min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.5rem;
+      animation: fade-up 0.5s ease both;
+    }
+    .layout .panel:nth-child(2) { animation-delay: 0.08s; }
+
+    h2 { font-size: 0.95rem; font-weight: 600; margin: 0 0 1rem; }
+
+    label {
+      display: block; margin-top: 1.1rem; margin-bottom: 0.35rem;
+      font-size: 0.8rem; font-weight: 600; color: var(--text-dim);
+    }
+    label:first-of-type { margin-top: 0; }
+
+    input, select {
+      width: 100%; padding: 0.55rem 0.7rem; font-size: 0.9rem;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--bg); color: var(--text);
+      font-family: inherit;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    input:focus, select:focus {
+      outline: none; border-color: var(--accent); background: var(--panel);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    input::placeholder { color: #a8a8ac; }
+
+    .hint { color: var(--text-dim); font-size: 0.78rem; margin-top: 0.35rem; line-height: 1.4; }
+    .row { display: flex; gap: 0.9rem; }
     .row > div { flex: 1; }
-    button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    fieldset { margin-top: 1.5rem; border: 1px solid #ddd; }
+
+    .ai-config-row {
+      margin-top: 1.1rem; display: flex; align-items: center; gap: 0.7rem;
+      padding: 0.7rem 0.85rem; background: var(--bg);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+    }
+    .ai-config-row input[type="number"] { width: 70px; flex: none; }
+    .ai-summary { font-size: 0.82rem; color: var(--text-dim); flex: 1; }
+    .ai-summary b { color: var(--text); font-weight: 600; }
+
+    button {
+      font-family: inherit; font-size: 0.88rem; font-weight: 600;
+      border: none; border-radius: var(--radius-sm); cursor: pointer;
+      transition: transform 0.12s ease, box-shadow 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+    }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+    .btn-primary {
+      width: 100%; margin-top: 1.4rem; padding: 0.7rem 1rem;
+      background: var(--accent); color: white;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 4px 14px rgba(80, 70, 229, 0.35); }
+
+    .btn-ghost {
+      padding: 0.45rem 0.8rem; background: var(--panel); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Terminal */
+    .term-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+    .term-head h2 { margin: 0; }
+    .live-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim);
+      margin-left: auto;
+    }
+    .live-dot.active { background: var(--success); animation: pulse 1.4s ease-in-out infinite; }
 
     .terminal {
-      background: #0d1117; color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.85rem; border-radius: 6px; padding: 1rem; height: 520px; overflow-y: auto;
+      background: #0d0d12; color: #d4d4d8; font-family: var(--mono);
+      font-size: 0.82rem; line-height: 1.55; border-radius: var(--radius-sm);
+      padding: 1rem 1.1rem; height: 520px; overflow-y: auto;
       white-space: pre-wrap; word-break: break-word;
     }
-    .terminal .placeholder { color: #6e7681; }
-    .terminal .err { color: #ff7b72; }
-    .terminal .result-success { color: #3fb950; font-weight: bold; }
-    .terminal .result-failed { color: #ff7b72; font-weight: bold; }
-    .terminal .result-valid { color: #58a6ff; font-weight: bold; }
-    .terminal .code-block { color: #c9d1d9; background: #161b22; display: block; padding: 0.75rem;
-      margin-top: 0.4rem; border-radius: 4px; }
+    .terminal .placeholder { color: #55555e; }
+    .terminal .line { animation: fade-in 0.15s ease both; }
+    .terminal .err { color: #f87171; }
+    .terminal .result-success { color: #4ade80; font-weight: 700; }
+    .terminal .result-failed { color: #f87171; font-weight: 700; }
+    .terminal .result-valid { color: #60a5fa; font-weight: 700; }
+    .terminal .code-block {
+      color: #d4d4d8; background: #17171d; display: block; padding: 0.8rem;
+      margin-top: 0.5rem; border-radius: 6px; border: 1px solid #26262e;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(16, 16, 20, 0.45);
+      backdrop-filter: blur(2px);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+      z-index: 50;
+    }
+    .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+    .modal {
+      background: var(--panel); border-radius: var(--radius);
+      box-shadow: var(--shadow-lg); width: 440px; max-width: 92vw;
+      padding: 1.5rem; transform: scale(0.96) translateY(6px); opacity: 0;
+      transition: transform 0.18s ease, opacity 0.18s ease;
+    }
+    .modal-backdrop.open .modal { transform: scale(1) translateY(0); opacity: 1; }
+    .modal h3 { margin: 0 0 0.2rem; font-size: 1.05rem; }
+    .modal .modal-hint { color: var(--text-dim); font-size: 0.82rem; margin: 0 0 1.1rem; }
+
+    .provider-grid { display: flex; gap: 0.5rem; }
+    .provider-card {
+      flex: 1; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+      padding: 0.6rem 0.4rem; text-align: center; cursor: pointer;
+      font-size: 0.8rem; font-weight: 600; color: var(--text-dim);
+      transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+    }
+    .provider-card:hover { transform: translateY(-1px); }
+    .provider-card.selected {
+      border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+    }
+
+    .modal-actions { display: flex; gap: 0.6rem; margin-top: 1.4rem; }
+    .modal-actions button { flex: 1; }
+
+    @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fade-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); } 70% { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); } }
+
+    @media (max-width: 860px) {
+      .layout { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
-  <h1>AbinDebugger</h1>
+  <div class="topbar">
+    <span class="logo-dot"></span>
+    <h1>AbinDebugger</h1>
+    <span class="tag">local &middot; automated program repair</span>
+  </div>
+
   <div class="layout">
     <div class="panel">
+      <h2>Configuration</h2>
       <form id="run-form">
         <label for="model">Model</label>
         <select id="model" name="model" required>
@@ -68,36 +237,65 @@
           </div>
         </div>
 
-        <fieldset>
-          <legend>AI-generated test cases (optional)</legend>
-          <label for="generate_ai_tests">Number of AI test cases to generate</label>
-          <input id="generate_ai_tests" name="generate_ai_tests" type="number" value="0" min="0">
+        <label>AI-generated test cases</label>
+        <div class="ai-config-row">
+          <input id="generate_ai_tests" name="generate_ai_tests" type="number" value="0" min="0" title="Number of AI test cases to generate">
+          <span class="ai-summary" id="ai-summary">off</span>
+          <button type="button" class="btn-ghost" id="open-modal">Configure&hellip;</button>
+        </div>
+        <input type="hidden" id="ai_provider" name="ai_provider" value="anthropic">
+        <input type="hidden" id="ai_model" name="ai_model" value="{{ default_models.get('anthropic', '') }}">
+        <input type="hidden" id="api_key" name="api_key" value="">
 
-          <label for="ai_model">Claude model</label>
-          <input id="ai_model" name="ai_model" value="{{ ai_model_default }}">
-
-          <label for="api_key">Anthropic API key</label>
-          <input id="api_key" name="api_key" type="password" autocomplete="off"
-                 placeholder="Leave blank to use ANTHROPIC_API_KEY from .env">
-          <p class="hint">Only sent for this run, never written to disk or logged server-side.</p>
-        </fieldset>
-
-        <button id="run-btn" type="submit">Run debugger</button>
+        <button id="run-btn" class="btn-primary" type="submit">Run debugger</button>
       </form>
     </div>
 
     <div class="panel">
-      <label>Live output</label>
+      <div class="term-head">
+        <h2>Live output</h2>
+        <span class="live-dot" id="live-dot"></span>
+      </div>
       <div id="terminal" class="terminal"><span class="placeholder">Run the debugger to see live output here.</span></div>
     </div>
   </div>
 
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal">
+      <h3>AI test generation</h3>
+      <p class="modal-hint">Pick a provider and model. The API key is sent only for this run &mdash; never written to disk or logged.</p>
+
+      <label>Provider</label>
+      <div class="provider-grid" id="provider-grid">
+        {% for p in providers %}
+        <div class="provider-card" data-provider="{{ p }}">{{ {'anthropic': 'Claude', 'openai': 'ChatGPT', 'gemini': 'Gemini'}.get(p, p) }}</div>
+        {% endfor %}
+      </div>
+
+      <label for="modal-model">Model</label>
+      <input id="modal-model" type="text">
+      <p class="hint">Model IDs change often &mdash; check the provider's docs if this 404s.</p>
+
+      <label for="modal-api-key">API key</label>
+      <input id="modal-api-key" type="password" autocomplete="off" placeholder="Leave blank to use the key from .env">
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="modal-cancel">Cancel</button>
+        <button type="button" class="btn-primary" id="modal-save" style="margin-top:0;">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    const DEFAULT_MODELS = {{ default_models | tojson }};
+    const PROVIDER_LABELS = {anthropic: 'Claude', openai: 'ChatGPT', gemini: 'Gemini'};
+
     const modelSelect = document.getElementById('model');
     const funcSelect = document.getElementById('func');
     const form = document.getElementById('run-form');
     const runBtn = document.getElementById('run-btn');
     const terminal = document.getElementById('terminal');
+    const liveDot = document.getElementById('live-dot');
 
     async function refreshFunctions() {
       funcSelect.innerHTML = '';
@@ -114,9 +312,64 @@
     modelSelect.addEventListener('change', refreshFunctions);
     if (modelSelect.value) refreshFunctions();
 
+    // --- AI provider modal ---
+    const backdrop = document.getElementById('modal-backdrop');
+    const providerGrid = document.getElementById('provider-grid');
+    const modalModel = document.getElementById('modal-model');
+    const modalApiKey = document.getElementById('modal-api-key');
+    const hiddenProvider = document.getElementById('ai_provider');
+    const hiddenModel = document.getElementById('ai_model');
+    const hiddenApiKey = document.getElementById('api_key');
+    const aiSummary = document.getElementById('ai-summary');
+    const generateAiTests = document.getElementById('generate_ai_tests');
+
+    let modalSelectedProvider = hiddenProvider.value || 'anthropic';
+
+    function selectProviderCard(provider) {
+      modalSelectedProvider = provider;
+      [...providerGrid.children].forEach(card => {
+        card.classList.toggle('selected', card.dataset.provider === provider);
+      });
+      if (!modalModel.dataset.userEdited) {
+        modalModel.value = DEFAULT_MODELS[provider] || '';
+      }
+    }
+    providerGrid.addEventListener('click', (e) => {
+      const card = e.target.closest('.provider-card');
+      if (card) selectProviderCard(card.dataset.provider);
+    });
+    modalModel.addEventListener('input', () => { modalModel.dataset.userEdited = '1'; });
+
+    function updateSummary() {
+      const n = generateAiTests.value || '0';
+      if (n === '0') {
+        aiSummary.textContent = 'off';
+      } else {
+        aiSummary.innerHTML = `${n} case(s) via <b>${PROVIDER_LABELS[hiddenProvider.value] || hiddenProvider.value}</b> / ${hiddenModel.value}`;
+      }
+    }
+    generateAiTests.addEventListener('input', updateSummary);
+
+    document.getElementById('open-modal').addEventListener('click', () => {
+      selectProviderCard(modalSelectedProvider);
+      modalModel.value = hiddenModel.value || DEFAULT_MODELS[modalSelectedProvider] || '';
+      modalApiKey.value = hiddenApiKey.value;
+      backdrop.classList.add('open');
+    });
+    document.getElementById('modal-cancel').addEventListener('click', () => backdrop.classList.remove('open'));
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.classList.remove('open'); });
+    document.getElementById('modal-save').addEventListener('click', () => {
+      hiddenProvider.value = modalSelectedProvider;
+      hiddenModel.value = modalModel.value;
+      hiddenApiKey.value = modalApiKey.value;
+      backdrop.classList.remove('open');
+      updateSummary();
+    });
+
+    // --- Terminal / run ---
     function appendLine(text, cls) {
       const line = document.createElement('div');
-      if (cls) line.className = cls;
+      line.className = 'line' + (cls ? ' ' + cls : '');
       line.textContent = text;
       terminal.appendChild(line);
       terminal.scrollTop = terminal.scrollHeight;
@@ -134,11 +387,16 @@
       }
     }
 
+    function setRunning(running) {
+      runBtn.disabled = running;
+      runBtn.textContent = running ? 'Running…' : 'Run debugger';
+      liveDot.classList.toggle('active', running);
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       terminal.innerHTML = '';
-      runBtn.disabled = true;
-      runBtn.textContent = 'Running...';
+      setRunning(true);
 
       try {
         const res = await fetch('/run', { method: 'POST', body: new FormData(form) });
@@ -157,21 +415,20 @@
         };
         source.addEventListener('done', () => {
           source.close();
-          runBtn.disabled = false;
-          runBtn.textContent = 'Run debugger';
+          setRunning(false);
         });
         source.onerror = () => {
           appendLine('[error] Connection to server lost.', 'err');
           source.close();
-          runBtn.disabled = false;
-          runBtn.textContent = 'Run debugger';
+          setRunning(false);
         };
       } catch (err) {
         appendLine('[error] ' + err, 'err');
-        runBtn.disabled = false;
-        runBtn.textContent = 'Run debugger';
+        setRunning(false);
       }
     });
+
+    updateSummary();
   </script>
 </body>
 </html>

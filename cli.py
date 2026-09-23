@@ -65,14 +65,19 @@ def main():
    )
    parser.add_argument(
        "--generate-ai-tests", type=int, default=0, metavar="N",
-       help="Generate N additional AI-authored test cases via the Claude API "
-            "(requires ANTHROPIC_API_KEY in .env) and inject them into the "
-            "test suite before debugging",
+       help="Generate N additional AI-authored test cases (requires that "
+            "provider's API key in .env) and inject them into the test "
+            "suite before debugging",
+   )
+   parser.add_argument(
+       "--ai-provider", type=str, default="anthropic",
+       choices=["anthropic", "openai", "gemini"],
+       help="LLM provider for --generate-ai-tests",
    )
    parser.add_argument(
        "--ai-model", type=str, default=None,
-       help="Claude model to use for --generate-ai-tests "
-            "(default: model.misc.generate_test_cases.DEFAULT_MODEL)",
+       help="Model to use for --generate-ai-tests "
+            "(default: model.misc.generate_test_cases.DEFAULT_MODELS[--ai-provider])",
    )
 
    args = parser.parse_args()
@@ -147,18 +152,19 @@ def main():
    )
 
    if args.generate_ai_tests > 0:
-       from model.misc.generate_test_cases import generate_injectable_test_cases, DEFAULT_MODEL
+       from model.misc.generate_test_cases import DEFAULT_MODELS, generate_injectable_test_cases
 
        param_types = dict(zip(parsed_types['input_args'], parsed_types['type']))
        print(f"Generating {args.generate_ai_tests} AI-authored test case(s) "
-             f"via {args.ai_model or DEFAULT_MODEL}...")
+             f"via {args.ai_provider}/{args.ai_model or DEFAULT_MODELS[args.ai_provider]}...")
        try:
            ai_tests = generate_injectable_test_cases(
                source_path=args.model,
                function_name=args.func,
                param_types=param_types,
                num_cases=args.generate_ai_tests,
-               model=args.ai_model or DEFAULT_MODEL,
+               provider=args.ai_provider,
+               model=args.ai_model,
            )
        except Exception as e:
            print(f"Error: AI test generation failed ({e}). "
