@@ -3,6 +3,52 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix a malformed mined hypothesis aborting the whole generator, not just itself
+
+**Module:** `model/HypothesisTester.py`
+
+**Description:** `HypothesisTester.__init__` calls
+`build_hypothesis_model()` directly, before `super().__init__()` and
+long before `ModelTester`'s own `__enter__`/`__exit__` exception
+isolation is active. Inside it, `HypothesisNodeTransformer._splice()`
+does a raw `ast.parse(self.replacement_src, mode='exec')` on the mined
+pattern's replacement text whenever the target statement isn't an
+`If`/`While`/`For`/`AsyncFor` header. Some mined patterns aren't valid
+standalone Python on their own (e.g. a bare `except KeyError as
+KeyError:` with no enclosing `try`), so this raised an uncaught
+`SyntaxError` from inside `HypothesisTester.__init__` -- unprotected by
+`ModelTester`'s own exception handling, since `__enter__` is never
+reached when the context-manager expression itself fails to construct.
+
+**Impact:** The `SyntaxError` propagated all the way past the single
+bad hypothesis, out of `EvaluationEngine.evaluate()`, out of the `for
+hypothesis in hypotheses_generator:` loop, and was only finally caught
+(and silently swallowed) by the *outer* `HypothesisGenerator.__exit__`
+-- aborting the entire hypothesis generator for that candidate instead
+of just skipping the one malformed hypothesis. Observed live: "An error
+ocurred during the hypotheses generation. SyntaxError: invalid syntax"
+right after testing a hypothesis whose text was an orphan `except`
+clause, ending generation for that candidate early (`Total Number of
+Hypotheses Generated` capped well short of a full search).
+
+**Fix:** Wrapped the `transformer.visit(tree)` call in
+`build_hypothesis_model()` in a `try/except SyntaxError`, returning
+`None` -- the same sentinel already used for "couldn't locate the
+target statement." `None` flows through the already-existing, already-
+safe pathway: `ModelTester.__enter__` catches `compile(None, ...)`'s
+`TypeError`, leaves `self.func` unset, and `model_testing()` reports
+`UndefinedTest`/`FailedTest` for each test case and moves on -- the
+same outcome any other failed-to-build candidate already gets.
+
+**Verified:** Reproduced the exact failure directly
+(`build_hypothesis_model(('except KeyError as KeyError:', 3, 0),
+src)`) -- confirmed it raised uncaught before the fix and now returns
+`None` cleanly. Confirmed a normal valid-syntax hypothesis still splices
+correctly (unaffected). Re-ran the full `benchmarks/Middle.py`/
+`middle1` repair end-to-end -- unaffected, same successful fix.
+
+---
+
 ## Add ChatGPT/Gemini as AI test generation providers, redesign the frontend
 
 **Module:** `model/misc/generate_test_cases.py`, `cli.py`, `frontend/app.py`, `frontend/templates/index.html`, `frontend/AbinDebugger.spec`, `requirements.txt`, `.env.example`

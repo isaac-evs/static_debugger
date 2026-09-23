@@ -89,7 +89,22 @@ class ModelConstructor():
 
        tree = ast.parse(src_code)
        transformer = HypothesisNodeTransformer(position, hypothesis_str)
-       new_tree = transformer.visit(tree)
+       try:
+           new_tree = transformer.visit(tree)
+       except SyntaxError:
+           # A mined pattern's replacement text isn't always valid
+           # standalone Python (e.g. a bare "except X:" header with no
+           # enclosing try) -- this runs in HypothesisTester.__init__,
+           # before ModelTester's own __enter__/__exit__ exception
+           # isolation is active, so an uncaught SyntaxError here would
+           # otherwise escape past this one hypothesis and abort the
+           # entire HypothesisGenerator for the current candidate.
+           # Returning None routes it through the same "couldn't build a
+           # model for this hypothesis" path as the case just below.
+           AbinLogging.debugging_logger.exception(
+               f"Hypothesis snippet at line {position} is not valid standalone Python: {hypothesis_str!r}"
+           )
+           return None
        if not transformer.applied:
            AbinLogging.debugging_logger.exception(
                f"Unable to locate the target statement at line {position} to apply the hypothesis."
