@@ -78,7 +78,7 @@ import logger as AbinLogging
 from AbinModel import AbinModel, parse_csv_data
 from model.core.ModelTester import PassedTest
 from model.HypothesisRefinement import AbductionSchema
-from model.misc.generate_test_cases import DEFAULT_MODELS, PROVIDERS, generate_injectable_test_cases
+from model.misc.generate_test_cases import DEFAULT_MODELS, PROVIDERS, generate_test_case_frames
 
 # patterns.db (the mined bug-fix pattern database HypothesisGenerator reads
 # from -- read-only outside of cli.py --mine) ships as a bundled resource,
@@ -103,6 +103,8 @@ _DONE = object()  # sentinel marking end-of-stream on a run's queue
 
 RUN_RESULTS = {}  # run_id -> CSV text for /download, populated once a run finishes
 _MAX_STORED_RESULTS = 30  # bounds memory for a long-lived local session
+
+RUN_AI_TESTS = {}  # run_id -> CSV text of the LLM-generated test cases, for /ai-tests download
 
 RUN_CANCEL_EVENTS = {}  # run_id -> threading.Event, set by /abort, checked by AbinModel._search
 
@@ -234,7 +236,7 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict, cancel_event: threadin
             param_types = dict(zip(parsed_types["input_args"], parsed_types["type"]))
             q.put(f"Generating {num_ai_tests} AI-authored test case(s) via {ai_provider}/{ai_model}...")
             try:
-                ai_tests = generate_injectable_test_cases(
+                ai_tests, ai_tests_csv = generate_test_case_frames(
                     source_path=model_path,
                     function_name=func_name,
                     param_types=param_types,
@@ -248,6 +250,19 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict, cancel_event: threadin
             else:
                 abin.inject_tests(ai_tests)
                 q.put(f"Injected {len(ai_tests)} AI-generated test case(s). Test suite size: {len(abin.test_suite)}")
+                # Shown/exported as soon as they exist -- not only if the repair
+                # succeeds -- since they're worth reviewing either way.
+                if len(RUN_AI_TESTS) >= _MAX_STORED_RESULTS:
+                    RUN_AI_TESTS.pop(next(iter(RUN_AI_TESTS)))
+                RUN_AI_TESTS[run_id] = ai_tests_csv.to_csv(index=False)
+                q.put("AI_TESTS::" + json.dumps({
+                    "provider": ai_provider,
+                    "model": ai_model,
+                    "columns": [str(c) for c in ai_tests_csv.columns],
+                    "rows": [[str(v) for v in row] for row in ai_tests_csv.itertuples(index=False)],
+                    "download_url": f"/ai-tests/{run_id}.csv",
+                    "filename": f"abindebugger_ai_tests_{run_id[:8]}.csv",
+                }))
             # AI generation is a blocking network call, not interruptible via
             # cancel_event -- if the user aborted while it was in flight, skip
             # straight to reporting the abort instead of starting the search.
@@ -381,6 +396,18 @@ def download(run_id):
         csv_text,
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="abindebugger_{run_id[:8]}.csv"'},
+    )
+
+
+@app.route("/ai-tests/<run_id>.csv", methods=["GET"])
+def download_ai_tests(run_id):
+    csv_text = RUN_AI_TESTS.get(run_id)
+    if csv_text is None:
+        return jsonify({"error": "no AI-generated tests for this run_id (or expired)"}), 404
+    return Response(
+        csv_text,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="abindebugger_ai_tests_{run_id[:8]}.csv"'},
     )
 
 

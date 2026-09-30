@@ -3,6 +3,48 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## View and download the LLM-generated test cases (CSV)
+
+**Module:** `model/misc/generate_test_cases.py`, `frontend/app.py`, `frontend/templates/index.html`, `README.md`, `guide.md`
+
+**Description:** AI-generated cases were injected into the suite but never
+shown, and the only export was the standalone `generate_test_cases.py` CLI.
+Added `generate_test_case_frames()`: one LLM call, rendered twice from the
+same suite &mdash; the typed frame `inject_tests()` needs, plus the
+`benchmarks/*.csv`-shaped frame (via the existing `build_dataframe`, so no
+pandas dtype/`np.int64` repr issues from converting back). `_execute_run`
+now emits an `AI_TESTS::` event the moment the cases exist (before the
+search, so they're reviewable even if the repair fails or is aborted),
+stores the CSV in a bounded `RUN_AI_TESTS` dict (30 runs, like
+`RUN_RESULTS`), and serves it from `GET /ai-tests/<run_id>.csv`. The UI
+gets an "AI-generated test cases" panel with a scrollable table and a
+Download CSV button. Cells are set via `textContent` only, since they're
+LLM output. The desktop app's Save As bridge (needed because WKWebView
+can't download) is now shared by both CSV links via `bindCsvDownload()`,
+with a per-link suggested filename (`abindebugger_ai_tests_<id>.csv`).
+
+**Impact:** No change to runs without AI tests (no event, no stored file,
+download 404s). The exported file round-trips through `parse_csv_data`, so
+it can be reused as a `--tests` file.
+
+**Fix:** N/A (new capability).
+
+**Verified:** Stubbed-LLM end-to-end through the real Flask server: exactly
+one `AI_TESTS` event before `RESULT`, a malformed row (wrong arity) is
+dropped from both the injected tests and the export, the AI cases show up
+in the search (`Testing AI1...`), download is `text/csv` with the right
+filename, the CSV parses back through `parse_csv_data`, an unknown run_id
+404s, and a no-AI run emits nothing. Page exercised in jsdom (15 checks):
+table headers/rows, a `<img onerror>` cell rendered as literal text with no
+element injected, meta line, plain-browser click left as a normal
+download, desktop click (fake `pywebview` bridge) prevented and routed to
+`save_csv` with the AI filename, panel cleared on a new run. **Not** live
+verified against a real provider: the Anthropic key in `.env` was rejected
+(401), which also confirmed the failure path (error line, search continues
+without AI tests, download 404s).
+
+---
+
 ## Fix Windows build crashing on launch (Unix-only SIGALRM timeout)
 
 **Module:** `utils.py`, `model/core/ModelTester.py`, `model/FaultLocalizator.py`, `model/debugger/Tracer.py`, `.github/workflows/build-desktop.yml`

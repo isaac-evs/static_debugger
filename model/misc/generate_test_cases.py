@@ -296,6 +296,19 @@ def generate_test_cases(source_path: str, function_name: str, param_types: Dict[
     return build_dataframe(suite, params, param_types)
 
 
+def generate_test_case_frames(source_path: str, function_name: str, param_types: Dict[str, str],
+        num_cases: int = 10, provider: str = 'anthropic', model: str = None,
+        api_key: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """ One LLM call, both renderings of the result: the typed frame
+    `AbinModel.inject_tests()` needs, and the benchmarks/*.csv-shaped frame
+    for showing/exporting the same cases (rows line up 1:1).
+    :rtype: Tuple[pd.DataFrame, pd.DataFrame]  (injectable, csv_shaped)
+    """
+    suite, params = _generate_suite(source_path, function_name, param_types, num_cases, provider, model, api_key)
+    return (build_injectable_dataframe(suite, params, param_types),
+            build_dataframe(suite, params, param_types))
+
+
 def write_csv(df: pd.DataFrame, output_path: str) -> None:
     """ Writes a generated test suite DataFrame to a CSV file.
     :rtype: None

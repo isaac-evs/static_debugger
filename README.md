@@ -134,6 +134,10 @@ CLI: `--generate-ai-tests N` (how many cases), `--ai-provider`, `--ai-model`.
 Web interface: click **Configure…** next to "AI-generated test cases" to
 pick a provider, model, and (optionally) paste a key just for that run
 instead of using `.env`.
+The generated cases appear in an **AI-generated test cases** table as soon
+as they exist (even if the repair later fails), with a **Download CSV**
+button; the file has the same shape as `benchmarks/*.csv`, so it can be
+passed back in later as a `--tests` file.
 
 ## Project layout
 

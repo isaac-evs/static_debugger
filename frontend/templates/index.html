@@ -76,6 +76,28 @@
       display: none;
     }
     .results-panel.visible { display: block; animation: fade-up 0.4s ease both; }
+
+    .ai-panel { max-width: 1160px; margin: 1.25rem auto 0; display: none; }
+    .ai-panel.visible { display: block; animation: fade-up 0.4s ease both; }
+    .ai-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.9rem; }
+    .ai-head h2 { margin: 0; }
+    .ai-meta { font-size: 0.78rem; color: var(--text-dim); }
+    .ai-head .btn-ghost { margin-left: auto; text-decoration: none; font-size: 0.82rem; font-weight: 600; }
+    .ai-table-wrap {
+      max-height: 280px; overflow: auto;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+    }
+    .ai-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 0.8rem; }
+    .ai-table th, .ai-table td {
+      padding: 0.45rem 0.75rem; text-align: left; white-space: nowrap;
+      border-bottom: 1px solid var(--border);
+    }
+    .ai-table th {
+      position: sticky; top: 0; background: var(--bg); color: var(--text-dim);
+      font-family: var(--sans); font-weight: 700; font-size: 0.72rem;
+    }
+    .ai-table tbody tr:last-child td { border-bottom: none; }
+    .ai-table tbody tr:hover { background: var(--accent-soft); }
     .stats-grid { display: flex; gap: 0.9rem; flex-wrap: wrap; }
     .stat-card {
       flex: 1; min-width: 150px;
@@ -307,6 +329,20 @@
     </div>
   </div>
 
+  <div class="panel ai-panel" id="ai-panel">
+    <div class="ai-head">
+      <h2>AI-generated test cases</h2>
+      <span class="ai-meta" id="ai-meta"></span>
+      <a id="ai-download-link" class="btn-ghost" href="#" download>Download CSV</a>
+    </div>
+    <div class="ai-table-wrap">
+      <table class="ai-table">
+        <thead><tr id="ai-table-head"></tr></thead>
+        <tbody id="ai-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="panel results-panel" id="results-panel">
     <h2>Results</h2>
     <div class="stats-grid">
@@ -391,15 +427,20 @@
     // doesn't implement a real download flow for it. Route through a
     // native Save As dialog instead when running inside pywebview; a
     // normal browser tab (the web frontend) keeps the plain <a download>.
+    function bindCsvDownload(link) {
+      link.addEventListener('click', async (e) => {
+        if (!window.pywebview) return; // plain browser: let <a download> handle it
+        e.preventDefault();
+        const url = link.dataset.downloadUrl;
+        if (!url) return;
+        const csvText = await (await fetch(url)).text();
+        await window.pywebview.api.save_csv(csvText, link.dataset.filename || url.split('/').pop());
+      });
+    }
     const downloadLink = document.getElementById('download-link');
-    downloadLink.addEventListener('click', async (e) => {
-      if (!window.pywebview) return; // plain browser: let <a download> handle it
-      e.preventDefault();
-      const url = downloadLink.dataset.downloadUrl;
-      if (!url) return;
-      const csvText = await (await fetch(url)).text();
-      await window.pywebview.api.save_csv(csvText, url.split('/').pop());
-    });
+    const aiDownloadLink = document.getElementById('ai-download-link');
+    bindCsvDownload(downloadLink);
+    bindCsvDownload(aiDownloadLink);
 
     async function refreshFunctions() {
       funcSelect.innerHTML = '';
@@ -524,6 +565,35 @@
       if (result.stats) showResults(result.status, result.stats);
     }
 
+    function showAiTests(data) {
+      // textContent only -- cell values come from an LLM, never inject as HTML
+      const head = document.getElementById('ai-table-head');
+      const body = document.getElementById('ai-table-body');
+      head.replaceChildren(...data.columns.map(c => {
+        const th = document.createElement('th');
+        th.textContent = c;
+        return th;
+      }));
+      body.replaceChildren(...data.rows.map(row => {
+        const tr = document.createElement('tr');
+        row.forEach(cell => {
+          const td = document.createElement('td');
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        return tr;
+      }));
+      document.getElementById('ai-meta').textContent =
+        `${data.rows.length} case(s) via ${data.provider} / ${data.model}`;
+      aiDownloadLink.href = data.download_url;
+      aiDownloadLink.dataset.downloadUrl = data.download_url;
+      aiDownloadLink.dataset.filename = data.filename;
+      const panel = document.getElementById('ai-panel');
+      panel.classList.remove('visible');
+      void panel.offsetWidth; // restart the fade-up animation on repeated runs
+      panel.classList.add('visible');
+    }
+
     const STATUS_LABELS = {success: 'Repaired', failed: 'Not repaired', valid: 'No defect found', aborted: 'Aborted'};
 
     function showResults(status, stats) {
@@ -579,6 +649,7 @@
       terminal.innerHTML = '';
       pendingItems = [];
       document.getElementById('results-panel').classList.remove('visible');
+      document.getElementById('ai-panel').classList.remove('visible');
       setRunning(true);
 
       try {
@@ -591,6 +662,8 @@
           const text = event.data;
           if (text.startsWith('RESULT::')) {
             appendResult(JSON.parse(text.slice(8)));
+          } else if (text.startsWith('AI_TESTS::')) {
+            showAiTests(JSON.parse(text.slice(10)));
           } else if (text.startsWith('[error]')) {
             appendLine(text, 'err');
           } else {

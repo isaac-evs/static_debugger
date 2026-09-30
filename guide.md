@@ -71,6 +71,11 @@ ti usando inteligencia artificial (Claude, ChatGPT o Gemini).
    esa ejecución; nunca se guarda ni se comparte).
 5. Haz clic en **Save**.
 6. Haz clic en **Run debugger** como de costumbre.
+7. En cuanto la IA termina de generar los casos, aparece un panel
+   **AI-generated test cases** con una tabla de todos los casos creados.
+   Haz clic en **Download CSV** para guardarlos en tu computadora (el
+   archivo tiene el mismo formato que los archivos de prueba incluidos,
+   así que puedes reutilizarlo después).
 
 Si no tienes una llave de API a mano, deja el número en `0` y usa la
 aplicación sin esta función — el resto funciona igual.
