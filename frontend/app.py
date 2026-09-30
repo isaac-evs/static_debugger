@@ -44,6 +44,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -105,6 +106,7 @@ RUN_RESULTS = {}  # run_id -> CSV text for /download, populated once a run finis
 _MAX_STORED_RESULTS = 30  # bounds memory for a long-lived local session
 
 RUN_AI_TESTS = {}  # run_id -> CSV text of the LLM-generated test cases, for /ai-tests download
+RUN_REPAIRS = {}  # run_id -> (filename, source) of a successfully repaired program, for /repaired download
 
 RUN_CANCEL_EVENTS = {}  # run_id -> threading.Event, set by /abort, checked by AbinModel._search
 
@@ -283,12 +285,24 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict, cancel_event: threadin
             q.put("RESULT::" + json.dumps({"status": "aborted", "message": "Aborted by user.", "code": None}))
             return
 
-        if repaired_code:
-            result = {"status": "success", "message": "SUCCESSFUL REPAIR! Found candidate fix:",
-                      "code": "\n".join(repaired_code)}
-        elif behavior.name == "Valid":
+        # Valid first: for a program that already passes, the engine hands
+        # back its unchanged source, which is not a repair (and must never
+        # be offered as a "repaired program").
+        if behavior.name == "Valid":
             result = {"status": "valid", "message": "NO DEFECT FOUND. All tests passed on the original model.",
                       "code": None}
+        elif repaired_code:
+            result = {"status": "success", "message": "SUCCESSFUL REPAIR! Found candidate fix:",
+                      "code": "\n".join(repaired_code)}
+            filename = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(model_path).stem) + "_repaired.py"
+            if len(RUN_REPAIRS) >= _MAX_STORED_RESULTS:
+                RUN_REPAIRS.pop(next(iter(RUN_REPAIRS)))
+            RUN_REPAIRS[run_id] = (filename, result["code"] + "\n")
+            result["program"] = {
+                "function": func_name,
+                "filename": filename,
+                "download_url": f"/repaired/{run_id}.py",
+            }
         else:
             result = {"status": "failed",
                       "message": "UNABLE TO REPAIR. No candidate hypotheses passed the test suite.", "code": None}
@@ -408,6 +422,19 @@ def download_ai_tests(run_id):
         csv_text,
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="abindebugger_ai_tests_{run_id[:8]}.csv"'},
+    )
+
+
+@app.route("/repaired/<run_id>.py", methods=["GET"])
+def download_repaired(run_id):
+    stored = RUN_REPAIRS.get(run_id)
+    if stored is None:
+        return jsonify({"error": "no repaired program for this run_id (or expired)"}), 404
+    filename, source = stored
+    return Response(
+        source,
+        mimetype="text/x-python",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

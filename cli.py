@@ -179,13 +179,15 @@ def main():
    )
 
    print("-" * 50)
-   if repaired_code:
+   # Valid must be checked first: the engine returns the unchanged source
+   # for a program that already passes, which is not a repair.
+   if behavior.name == "Valid":
+       print("\nNO DEFECT FOUND. All tests passed on the original model.")
+   elif repaired_code:
        print("\n SUCCESSFUL REPAIR! Found candidate fix:")
        print("=" * 40)
        print("\n".join(repaired_code))
        print("=" * 40)
-   elif behavior.name == "Valid":
-       print("\nNO DEFECT FOUND. All tests passed on the original model.")
    else:
        print("\nUNABLE TO REPAIR. No candidate hypotheses passed the test suite.")
 

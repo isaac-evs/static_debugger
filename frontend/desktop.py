@@ -23,25 +23,32 @@ from app import app
 
 class Api:
     """ Exposed to the page as window.pywebview.api.* (see the JS bridge
-    docs: https://pywebview.flowrl.com/guide/api.html). Used only for the
-    CSV download -- WKWebView (macOS) doesn't honor <a download>/
-    Content-Disposition inside a bare pywebview window: instead of saving
-    a file, it just navigates the single window to the raw CSV text, with
-    no browser chrome to navigate back from. Routing the save through a
-    native OS "Save As" dialog avoids that navigation entirely. """
+    docs: https://pywebview.flowrl.com/guide/api.html). Used for file
+    downloads (results/AI-test CSVs, the repaired .py) -- WKWebView (macOS)
+    doesn't honor <a download>/Content-Disposition inside a bare pywebview
+    window: instead of saving a file, it just navigates the single window
+    to the raw text, with no browser chrome to navigate back from. Routing
+    the save through a native OS "Save As" dialog avoids that navigation
+    entirely. """
 
-    def save_csv(self, csv_text: str, suggested_name: str) -> bool:
-        """ :rtype: bool """
+    _FILE_TYPES = {
+        ".csv": ("CSV Files (*.csv)", "All files (*.*)"),
+        ".py": ("Python Files (*.py)", "All files (*.*)"),
+    }
+
+    def save_text(self, text: str, suggested_name: str) -> bool:
+        """ :rtype: bool -- False if the user cancelled the dialog. """
+        suffix = "." + suggested_name.rsplit(".", 1)[-1].lower() if "." in suggested_name else ""
         result = webview.windows[0].create_file_dialog(
             webview.FileDialog.SAVE,
             save_filename=suggested_name,
-            file_types=("CSV Files (*.csv)", "All files (*.*)"),
+            file_types=self._FILE_TYPES.get(suffix, ("All files (*.*)",)),
         )
         if not result:
             return False
         path = result if isinstance(result, str) else result[0]
         with open(path, "w", newline="") as f:
-            f.write(csv_text)
+            f.write(text)
         return True
 
 

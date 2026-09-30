@@ -91,6 +91,14 @@ Cuando la ejecución termina, aparece un panel de **Results** con:
 Haz clic en **Download results (CSV)** para guardar una tabla con el
 detalle de cada prueba (antes/después) en tu computadora.
 
+Si el programa se reparó, también aparece un panel **Repaired program**
+que muestra el programa corregido por separado. Haz clic en
+**Download .py** para guardarlo como archivo (por ejemplo,
+`Middle_repaired.py`). El archivo contiene todo el programa; solo se
+corrige la función que elegiste. Nota: el programa se regenera desde
+su estructura interna, así que los comentarios del archivo original no
+se conservan.
+
 ## 6. Copiar la salida
 
 Si quieres copiar todo el texto de la consola (por ejemplo, para

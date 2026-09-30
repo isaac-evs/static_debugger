@@ -3,6 +3,55 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## View and download the repaired program (.py); fix "no defect" reported as a repair
+
+**Module:** `frontend/app.py`, `frontend/templates/index.html`, `frontend/desktop.py`, `cli.py`, `README.md`, `guide.md`
+
+**Description:** The repaired source only appeared inside the terminal
+transcript. Added a "Repaired program" panel showing it on its own, and a
+`.py` download (`GET /repaired/<run_id>.py`, filename
+`<model stem>_repaired.py`, sanitized to `[A-Za-z0-9_.-]` before it goes
+into `Content-Disposition`; stored in a bounded `RUN_REPAIRS` dict).
+The download bridge for the desktop app was CSV-only (`save_csv`, with a
+hardcoded CSV file-type filter); it's now a generic `save_text()` that picks
+the dialog's file-type filter from the extension, shared by all three
+download links (results CSV, AI-test CSV, repaired `.py`).
+
+Found while building it: the status logic checked `if repaired_code:`
+*before* `behavior == Valid`. For a program that already passes every test
+the engine returns its **unchanged** source, so `app.py` and `cli.py`
+reported "SUCCESSFUL REPAIR! Found candidate fix" for code that needed no
+repair -- and this feature would have offered that as a "repaired program".
+Reordered in both so `Valid` is checked first, and a program is only stored
+and offered when a real repair was found.
+
+**Impact:** An already-correct program now reports "NO DEFECT FOUND"
+(previously mislabelled as a repair, in the CLI too). Failed and valid runs
+offer no download. Note the file is the whole module with only the target
+function repaired (other functions, e.g. `middle2`, are untouched), and it's
+regenerated from the AST, so the original's comments and module docstring
+aren't preserved.
+
+**Fix:** See above.
+
+**Verified:** Through the real server: a successful repair returns the
+program payload, the download has the right type/filename, matches the
+displayed code plus a trailing newline, and -- executed -- passes all 7
+tests of `Middle.csv` (including the two that failed before). An
+already-passing program yields status `valid`, no program, and a 404 on the
+download; a failed repair likewise; a model file named `weird name!.py`
+downloads as `weird_name__repaired.py`; unknown run_id 404s. `cli.py` now
+prints NO DEFECT FOUND for the passing case and still reports a real repair.
+Page checked in jsdom: panel shows/hides correctly, whitespace preserved,
+code rendered as text, plain browser leaves `<a download>` alone, desktop
+click routes to `save_text` with the `.py` name, and the results/AI-test
+links still work through the renamed bridge call. `Api.save_text` checked
+with a mocked native dialog (correct file-type filter per extension, file
+written, cancel returns False). The native dialog itself can't be automated
+here.
+
+---
+
 ## View and download the LLM-generated test cases (CSV)
 
 **Module:** `model/misc/generate_test_cases.py`, `frontend/app.py`, `frontend/templates/index.html`, `README.md`, `guide.md`

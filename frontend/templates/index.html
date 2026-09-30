@@ -83,6 +83,14 @@
     .ai-head h2 { margin: 0; }
     .ai-meta { font-size: 0.78rem; color: var(--text-dim); }
     .ai-head .btn-ghost { margin-left: auto; text-decoration: none; font-size: 0.82rem; font-weight: 600; }
+    .program-panel { max-width: 1160px; margin: 1.25rem auto 0; display: none; }
+    .program-panel.visible { display: block; animation: fade-up 0.4s ease both; }
+    .program-view {
+      margin: 0; max-height: 420px; overflow: auto;
+      background: #0d0d12; color: #d4d4d8; font-family: var(--mono);
+      font-size: 0.82rem; line-height: 1.55; border-radius: var(--radius-sm);
+      padding: 1rem 1.1rem; white-space: pre; tab-size: 4;
+    }
     .ai-table-wrap {
       max-height: 280px; overflow: auto;
       border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -375,6 +383,15 @@
     <a id="download-link" class="btn-ghost download-link" href="#" download>Download results (CSV)</a>
   </div>
 
+  <div class="panel program-panel" id="program-panel">
+    <div class="ai-head">
+      <h2>Repaired program</h2>
+      <span class="ai-meta" id="program-meta"></span>
+      <a id="program-download-link" class="btn-ghost" href="#" download>Download .py</a>
+    </div>
+    <pre class="program-view" id="program-view"></pre>
+  </div>
+
   <div class="modal-backdrop" id="modal-backdrop">
     <div class="modal">
       <h3>AI test generation</h3>
@@ -427,20 +444,22 @@
     // doesn't implement a real download flow for it. Route through a
     // native Save As dialog instead when running inside pywebview; a
     // normal browser tab (the web frontend) keeps the plain <a download>.
-    function bindCsvDownload(link) {
+    function bindDownload(link) {
       link.addEventListener('click', async (e) => {
         if (!window.pywebview) return; // plain browser: let <a download> handle it
         e.preventDefault();
         const url = link.dataset.downloadUrl;
         if (!url) return;
-        const csvText = await (await fetch(url)).text();
-        await window.pywebview.api.save_csv(csvText, link.dataset.filename || url.split('/').pop());
+        const text = await (await fetch(url)).text();
+        await window.pywebview.api.save_text(text, link.dataset.filename || url.split('/').pop());
       });
     }
     const downloadLink = document.getElementById('download-link');
     const aiDownloadLink = document.getElementById('ai-download-link');
-    bindCsvDownload(downloadLink);
-    bindCsvDownload(aiDownloadLink);
+    const programDownloadLink = document.getElementById('program-download-link');
+    bindDownload(downloadLink);
+    bindDownload(aiDownloadLink);
+    bindDownload(programDownloadLink);
 
     async function refreshFunctions() {
       funcSelect.innerHTML = '';
@@ -563,6 +582,7 @@
         queueItem({type: 'code', text: result.code});
       }
       if (result.stats) showResults(result.status, result.stats);
+      if (result.program && result.code) showProgram(result.code, result.program);
     }
 
     function showAiTests(data) {
@@ -589,6 +609,19 @@
       aiDownloadLink.dataset.downloadUrl = data.download_url;
       aiDownloadLink.dataset.filename = data.filename;
       const panel = document.getElementById('ai-panel');
+      panel.classList.remove('visible');
+      void panel.offsetWidth; // restart the fade-up animation on repeated runs
+      panel.classList.add('visible');
+    }
+
+    function showProgram(code, program) {
+      document.getElementById('program-view').textContent = code;
+      document.getElementById('program-meta').textContent =
+        `${program.filename} · repaired ${program.function}()`;
+      programDownloadLink.href = program.download_url;
+      programDownloadLink.dataset.downloadUrl = program.download_url;
+      programDownloadLink.dataset.filename = program.filename;
+      const panel = document.getElementById('program-panel');
       panel.classList.remove('visible');
       void panel.offsetWidth; // restart the fade-up animation on repeated runs
       panel.classList.add('visible');
@@ -650,6 +683,7 @@
       pendingItems = [];
       document.getElementById('results-panel').classList.remove('visible');
       document.getElementById('ai-panel').classList.remove('visible');
+      document.getElementById('program-panel').classList.remove('visible');
       setRunning(true);
 
       try {
