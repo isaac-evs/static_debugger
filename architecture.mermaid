@@ -1,0 +1,47 @@
+graph TD
+    classDef entry fill:#5046e5,stroke:#312e81,stroke-width:2px,color:#fff;
+    classDef ai fill:#0d9488,stroke:#115e59,stroke-width:2px,color:#fff;
+    classDef core fill:#334155,stroke:#0f172a,stroke-width:2px,color:#fff;
+    classDef storage fill:#d97706,stroke:#92400e,stroke-width:2px,color:#fff;
+
+    %% ---- Entry points ----
+    CLI["cli.py<br/>(command line)"]:::entry
+    WEB["frontend/app.py<br/>(Flask, SSE streaming)"]:::entry
+    DESKTOP["frontend/desktop.py<br/>(pywebview native window)"]:::entry
+
+    DESKTOP -->|"wraps, same process"| WEB
+
+    %% ---- Shared orchestrator ----
+    ABIN["AbinModel<br/>(one debugging session)"]:::core
+
+    CLI --> ABIN
+    WEB --> ABIN
+
+    %% ---- AI test generation: an optional, isolated pre-step ----
+    subgraph AITESTS["AI test generation (optional, decoupled module)"]
+        GEN["generate_test_cases.py<br/>_generate_suite() dispatch"]:::ai
+        GEN --> CLAUDE["Claude API"]:::ai
+        GEN --> OPENAI["OpenAI API"]:::ai
+        GEN --> GEMINI["Gemini API"]:::ai
+        CLAUDE & OPENAI & GEMINI --> SUITE["TestCaseSuite<br/>(shared Pydantic schema)"]:::ai
+    end
+
+    CLI -. "--generate-ai-tests" .-> GEN
+    WEB -. "Configure… modal" .-> GEN
+    SUITE -->|"AbinModel.inject_tests(df)"| ABIN
+
+    %% ---- Core repair engine (deterministic, no AI) ----
+    subgraph ENGINE["Repair engine (deterministic)"]
+        FL["Fault Localization<br/>(Ochiai + sys.monitoring tracer)"]:::core
+        HG["Hypothesis Generation<br/>(AST mutation from mined patterns)"]:::core
+        HT["Hypothesis Testing<br/>(in-memory compile + exec)"]:::core
+        FL --> HG
+        HG --> HT
+        HT -->|"Same / Worsened: try next"| HG
+    end
+
+    ABIN --> FL
+    DB[("patterns.db<br/>~31k mined bug-fix patterns")]:::storage
+    DB --> HG
+
+    HT -->|"Correct"| RESULT["Repaired code + Results panel + CSV export"]:::core

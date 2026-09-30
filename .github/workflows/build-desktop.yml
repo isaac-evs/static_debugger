@@ -40,6 +40,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-desktop.txt
 
+      # PyInstaller only bundles the code, it never runs it -- a Unix-only
+      # call (like the old SIGALRM) builds fine and then crashes on launch.
+      # Actually run the repair engine on each OS so that's caught here.
+      - name: Smoke test (run a real repair on this OS)
+        shell: bash
+        run: |
+          python cli.py --model benchmarks/Middle.py --tests benchmarks/Middle.csv --func middle1 | tee smoke.txt
+          grep -q "SUCCESSFUL REPAIR" smoke.txt
+
       - name: Build with PyInstaller
         run: pyinstaller frontend/AbinDebugger.spec --noconfirm
 

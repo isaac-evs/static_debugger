@@ -27,6 +27,7 @@ disable instrumentation at call sites we don't need, at near-native speed.
 `sys.monitoring` is unavailable.
 """
 import sys
+import threading
 from types import FrameType, TracebackType
 from typing import Any, Callable, Optional, Type, TextIO
 
@@ -41,6 +42,15 @@ class Tracer(StackInspector):
     # Each Tracer instance gets its own monitoring tool slot while active,
     # so nested/sequential tracers never fight over the same id.
     _TOOL_NAME = "AbinDebugger"
+
+    # sys.monitoring is process-wide, so callbacks also fire for *other*
+    # threads' Python code (the per-test timeout timer, Flask/SSE threads in
+    # the web UI...). Only the thread that entered the `with` block is the
+    # code under test; anything else must be ignored -- otherwise, e.g.,
+    # the timer thread's own next line would consume the timeout flag and
+    # raise TimeoutError in the wrong thread, leaving a hung candidate
+    # running forever. (Class-level default: some subclasses skip __init__.)
+    _owner_thread: Optional[int] = None
     _CANDIDATE_TOOL_IDS = (
         (sys.monitoring.COVERAGE_ID, sys.monitoring.PROFILER_ID, sys.monitoring.OPTIMIZER_ID, 3, 4)
         if _HAS_MONITORING else ()
@@ -58,6 +68,8 @@ class Tracer(StackInspector):
 
     def _traceit(self, frame: FrameType, event: str, arg: Any) -> Optional[Callable]:
         """Internal tracing function."""
+        if threading.get_ident() != self._owner_thread:
+            return self._traceit
         if self.our_frame(frame):
             # Do not trace our own methods
             pass
@@ -127,6 +139,7 @@ class Tracer(StackInspector):
 
     def __enter__(self) -> Any:
         """Called at begin of `with` block. Turn tracing on."""
+        self._owner_thread = threading.get_ident()
         if not (_HAS_MONITORING and self._enable_monitoring()):
             # No sys.monitoring tool slot available (or unsupported
             # interpreter): fall back to the legacy tracing hook.

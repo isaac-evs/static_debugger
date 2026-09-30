@@ -7,10 +7,8 @@ from types import FunctionType, ModuleType, TracebackType
 from typing import Tuple, TypeVar, Type, Union, Optional, Any, List
 import logger as AbinLogging
 import config as DebugController
-import signal
 import utils
 from enum import Enum
-signal.signal(signal.SIGALRM, utils.test_timeout_handler)
 
 class Behavior(Enum):
    """ This class represents an enumeration of the currently
@@ -147,7 +145,7 @@ class ModelTester():
            AbinLogging.debugging_logger.info(f"Testing {test_case}...")
            try:
                with debugger:
-                   signal.setitimer(signal.ITIMER_REAL, DebugController.TEST_TIMEOUT)
+                   utils.start_test_timer(DebugController.TEST_TIMEOUT)
                    if self.func is None:
                        raise ImportError(f"""
                            Failed to import the given function {self.target_function} from the model {self.model.__name__}.
@@ -184,9 +182,9 @@ class ModelTester():
            finally:
                # Guaranteed to run even if the debugger's __exit__ decides
                # to re-raise (e.g. an internal tracer error): otherwise the
-               # OS alarm clock armed above keeps running in the background
-               # and can fire mid-way through a later, unrelated test.
-               signal.setitimer(signal.ITIMER_REAL, 0)
+               # timer armed above keeps running in the background and
+               # can fire mid-way through a later, unrelated test.
+               utils.cancel_test_timer()
 
            if check_consistency and new_observation[i][1] == FailedTest:
                AbinLogging.debugging_logger.debug('check_consistency')
@@ -196,7 +194,7 @@ class ModelTester():
                    break
 
        AbinLogging.debugging_logger.info(f"Model Test Finished...")
-       signal.setitimer(signal.ITIMER_REAL, 0) # Make sure the signal.SIGALRM is disabled.
+       utils.cancel_test_timer() # Make sure no timeout timer is left armed.
        self.observation = new_observation
        if not self.are_all_test_pass():
            self.influence_path = debugger.get_influence_path(self.model, self.func)

@@ -3,6 +3,112 @@
 A log of notable fixes and architectural changes, with the reasoning
 behind each one. Newest first.
 
+## Fix Windows build crashing on launch (Unix-only SIGALRM timeout)
+
+**Module:** `utils.py`, `model/core/ModelTester.py`, `model/FaultLocalizator.py`, `model/debugger/Tracer.py`, `.github/workflows/build-desktop.yml`
+
+**Description:** The per-test timeout used `signal.SIGALRM`/`signal.setitimer`/
+`signal.ITIMER_REAL`, none of which exist on Windows. `ModelTester.py` and
+`FaultLocalizator.py` registered the handler at import time, so the
+packaged Windows app died on launch with `AttributeError: module 'signal'
+has no attribute 'SIGALRM'` (reproduced by deleting those names from
+`signal` and running the previous code). The v1.0.x Windows CI builds
+still went green, because PyInstaller bundles code without executing it.
+
+**Impact:** The Windows release couldn't run at all.
+
+**Fix:** The signal handler only ever flipped a flag
+(`config.TIMEOUT_SIGNAL_RECEIVED`) that `AbinCollector.collect()` polls to
+raise the actual `TimeoutError`, so the signal source was replaceable:
+`utils.start_test_timer()`/`cancel_test_timer()` now use a daemon
+`threading.Timer` (with a generation counter so a late fire can never
+leak into a later test, and a flag reset at arm time). A naive swap alone
+was *not* enough: `sys.monitoring` is process-wide, so the tracer also fired
+on the timer thread's own lines and raised the `TimeoutError` *there*,
+leaving the hung candidate running forever (caught by testing an actual
+`while True` candidate, not just the happy path -- with `SIGALRM` the
+handler happened to run on the thread that gets interrupted). `Tracer` now
+records the thread that entered its `with` block and ignores events from
+every other thread. That also closes a latent gap in the web UI, where
+Flask/SSE threads could in principle have consumed the timeout flag. The
+dead `signal` import/registration in `FaultLocalizator.py` was removed.
+Added a smoke-test step to the release workflow that runs a real repair on
+each OS before building, so this class of bug fails CI instead of shipping.
+
+**Verified:** With `SIGALRM`/`setitimer`/`ITIMER_REAL` deleted from `signal`
+(what Windows looks like to this code): the old code crashes at import
+(reproduced), the new code completes a full repair. A candidate containing
+`while True` behaves identically before (real `SIGALRM`) and after (timer):
+the two hung tests time out at ~0.5s each, the passing test in between
+still passes, flag reset to 0. Same hung candidate through the Flask worker
+thread: test passes complete and Abort still works. Middle repairs; the
+PasswordStrength/HappyNumber results match the earlier baselines. **Not**
+verified on real Windows here -- the new CI smoke step is what will
+exercise it on a `windows-latest` runner.
+
+---
+
+## Add Abort button + loading spinner; correct an overstated timeout claim
+
+**Module:** `AbinModel.py`, `frontend/app.py`, `frontend/templates/index.html`, `frontend/DESKTOP_APP.md`, `presentation.md`
+
+**Description:** A user reported a run showing repeated "Current test
+timeout reached!" for several tests in a row and asked why it looked
+stalled, plus asked for an abort/pause control and a visible
+loading indicator. Traced the actual timeout mechanism to answer the
+"why" properly: `signal.setitimer`'s handler (`utils.test_timeout_handler`)
+only flips a shared flag (`config.TIMEOUT_SIGNAL_RECEIVED`); the real
+interruption happens in `AbinCollector.collect()`, which polls that
+flag on every traced line/call and raises `TimeoutError` from
+*whichever thread is executing the candidate*. That's cooperative
+polling on the correct thread, not signal delivery into a specific
+thread -- so a genuinely hung (but ordinary Python) candidate is
+already caught correctly even on the web UI's background thread. A
+repeated "timeout reached" streak is the default 1-second-per-test
+ceiling working as designed against a bad candidate, not a freeze --
+just slow and, until now, gave no visual sense of progress.
+
+This corrects an earlier claim (documented in `frontend/app.py`'s
+docstring, `frontend/DESKTOP_APP.md`, and `presentation.md`) that a
+background-thread run couldn't be reliably interrupted -- that
+conclusion came from a synthetic test with no trace hooks active and
+didn't reflect how this codebase's timeout actually works. Corrected
+in all three places rather than left standing.
+
+Added: a real Abort control (`AbinModel.cancel_event`, a
+`threading.Event` checked at the top of `_search()` and inside the
+hypothesis loop, so a recursive dive or a long inner loop both notice
+cancellation within roughly one hypothesis's worth of test evaluation
+-- there's no safe way to hard-kill a running thread mid-write). Wired
+through a new `POST /abort/<run_id>` endpoint and an Abort button in
+the UI. Added a CSS spinner next to "Live output" while a run is
+active, addressing the narrower, real remaining gap (a C-level block
+with no Python trace events, e.g. a long `time.sleep()`, which the
+polling mechanism can't interrupt on any thread).
+
+**Impact:** No behavior change for a normal, successful run. Fixes a
+real gap for a hung/slow run: previously the only way out was closing
+the app; now there's a bounded-latency Abort, and a spinner so a run
+that's legitimately grinding through timeouts doesn't read as frozen.
+
+**Fix:** See above.
+
+**Verified:** Reproduced the actual mechanism by reading
+`AbinCollector.collect()`/`AbinDebugger.__exit__` and cross-checking
+against the user's own pasted log (which *did* keep advancing test to
+test, consistent with cooperative polling working, not a true hang).
+Confirmed the correctness fix doesn't affect the normal path
+(`benchmarks/Middle.py`/`middle1` still repairs identically).
+Confirmed cancellation end-to-end: set mid-run on a real search
+(`PasswordStrength.py`, complexity 4), search stopped within ~2s of
+the abort call instead of running to completion, `behavior` came back
+`Undefined` and distinct from a normal "unable to repair" outcome.
+Confirmed `POST /abort/<run_id>` 404s for an unknown/already-finished
+run. Confirmed the spinner/Abort button render correctly (valid HTML,
+`node --check`-clean JS) and don't appear during a normal completed run.
+
+---
+
 ## Fix desktop app: CSV download stranding the window, and streaming freezes
 
 **Module:** `frontend/desktop.py`, `frontend/templates/index.html`

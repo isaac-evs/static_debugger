@@ -14,7 +14,7 @@ class AbinCollector(CoverageCollector):
         """
         Save coverage for an observed event.
 
-        In case a timeout is triggered by signal.SIGALRM,
+        In case a timeout is triggered by the per-test timer (utils.start_test_timer),
         the event will be detected by the change in the value
         of the control variable TIMEOUT_SIGNAL_RECEIVED.
         If the value is equal to 1 the function will raise a timeout exception.

@@ -141,8 +141,9 @@
     button:active { transform: scale(0.97); }
     button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
+    .run-row { display: flex; gap: 0.6rem; margin-top: 1.4rem; }
     .btn-primary {
-      width: 100%; margin-top: 1.4rem; padding: 0.7rem 1rem;
+      flex: 1; padding: 0.7rem 1rem;
       background: var(--accent); color: white;
     }
     .btn-primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 4px 14px rgba(80, 70, 229, 0.35); }
@@ -153,9 +154,22 @@
     }
     .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
 
+    .btn-danger {
+      padding: 0.7rem 1rem; background: var(--panel); color: var(--failed);
+      border: 1px solid var(--failed);
+    }
+    .btn-danger:hover:not(:disabled) { background: var(--failed); color: white; }
+    .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* Terminal */
     .term-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
     .term-head h2 { margin: 0; }
+    .spinner {
+      width: 15px; height: 15px; border-radius: 50%;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .live-dot {
       width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim);
       margin-left: auto;
@@ -174,6 +188,7 @@
     .terminal .result-success { color: #4ade80; font-weight: 700; }
     .terminal .result-failed { color: #f87171; font-weight: 700; }
     .terminal .result-valid { color: #60a5fa; font-weight: 700; }
+    .terminal .result-aborted { color: #fbbf24; font-weight: 700; }
     .terminal .code-block {
       color: #d4d4d8; background: #17171d; display: block; padding: 0.8rem;
       margin-top: 0.5rem; border-radius: 6px; border: 1px solid #26262e;
@@ -274,13 +289,17 @@
         <input type="hidden" id="ai_model" name="ai_model" value="{{ default_models.get('anthropic', '') }}">
         <input type="hidden" id="api_key" name="api_key" value="">
 
-        <button id="run-btn" class="btn-primary" type="submit">Run debugger</button>
+        <div class="run-row">
+          <button id="run-btn" class="btn-primary" type="submit">Run debugger</button>
+          <button id="abort-btn" class="btn-danger" type="button" hidden>Abort</button>
+        </div>
       </form>
     </div>
 
     <div class="panel">
       <div class="term-head">
         <h2>Live output</h2>
+        <span class="spinner" id="spinner" hidden></span>
         <span class="live-dot" id="live-dot"></span>
         <button type="button" class="btn-ghost" id="copy-btn">Copy</button>
       </div>
@@ -352,9 +371,12 @@
     const funcSelect = document.getElementById('func');
     const form = document.getElementById('run-form');
     const runBtn = document.getElementById('run-btn');
+    const abortBtn = document.getElementById('abort-btn');
+    const spinner = document.getElementById('spinner');
     const terminal = document.getElementById('terminal');
     const liveDot = document.getElementById('live-dot');
     const copyBtn = document.getElementById('copy-btn');
+    let currentRunId = null;
 
     copyBtn.addEventListener('click', async () => {
       if (flushScheduled) flushTerminal(); // don't miss lines still queued for the next frame
@@ -502,7 +524,7 @@
       if (result.stats) showResults(result.status, result.stats);
     }
 
-    const STATUS_LABELS = {success: 'Repaired', failed: 'Not repaired', valid: 'No defect found'};
+    const STATUS_LABELS = {success: 'Repaired', failed: 'Not repaired', valid: 'No defect found', aborted: 'Aborted'};
 
     function showResults(status, stats) {
       document.getElementById('stat-status').textContent = STATUS_LABELS[status] || status;
@@ -531,7 +553,26 @@
       runBtn.disabled = running;
       runBtn.textContent = running ? 'Running…' : 'Run debugger';
       liveDot.classList.toggle('active', running);
+      spinner.hidden = !running;
+      abortBtn.hidden = !running;
+      abortBtn.disabled = false;
+      abortBtn.textContent = 'Abort';
+      if (!running) currentRunId = null;
     }
+
+    abortBtn.addEventListener('click', async () => {
+      if (!currentRunId) return;
+      abortBtn.disabled = true;
+      abortBtn.textContent = 'Aborting…';
+      try {
+        await fetch('/abort/' + currentRunId, { method: 'POST' });
+      } catch (err) {
+        appendLine('[error] Failed to send abort: ' + err, 'err');
+      }
+      // The stream itself delivers the final "Aborted by user" result and
+      // 'done' event (see the /run handler below) -- setRunning(false)
+      // happens there, not here, so the terminal output stays consistent.
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -543,6 +584,7 @@
       try {
         const res = await fetch('/run', { method: 'POST', body: new FormData(form) });
         const { run_id } = await res.json();
+        currentRunId = run_id;
         const source = new EventSource('/stream/' + run_id);
 
         source.onmessage = (event) => {

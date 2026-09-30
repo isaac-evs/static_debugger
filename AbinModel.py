@@ -3,6 +3,7 @@ This module is the model of the system.
 This is the model representation of the MVC software pattern.
 """
 import sys
+import threading
 from typing import List, NamedTuple, Optional, Type, Tuple, Union
 from types import TracebackType
 from model.core.ModelTester import TestCase, Observation, InfluencePath, Behavior
@@ -81,6 +82,11 @@ class AbinModel():
         self.hypothesis_tester = tester
         self.hypotheses_generator = generator
         self.evaluation_engine = EvaluationEngine(function_name, test_suite, tester)
+        self.cancel_event: Optional[threading.Event] = None
+
+    def _is_cancelled(self) -> bool:
+        """ :rtype: bool """
+        return self.cancel_event is not None and self.cancel_event.is_set()
 
     def inject_tests(self, new_tests: pd.DataFrame) -> None:
         """ Appends additional test cases to the suite before the repair
@@ -149,6 +155,8 @@ class AbinModel():
 
         :rtype: SearchResult
         """
+        if self._is_cancelled():
+            return SearchResult(model_src_code, Behavior.Undefined, [], [], None, None, depth)
         AbinLogging.debugging_logger.info(f"""
         Schema: {self.abduction_schema}
         Abduction Depth: {depth}
@@ -192,6 +200,8 @@ class AbinModel():
 
             with hypotheses_generator:
                 for hypothesis in hypotheses_generator:
+                    if self._is_cancelled():
+                        break
                     AbinLogging.debugging_logger.info(f"""
                         Testing Hypothesis {self.abduction_breadth}.
                         Hypothesis: {hypothesis}
@@ -218,6 +228,9 @@ class AbinModel():
 
                     if behavior == Behavior.Correct:
                         break
+
+            if self._is_cancelled():
+                return SearchResult(model_src_code, Behavior.Undefined, prev_observation, new_observation, None, None, depth)
 
             if behavior == Behavior.Correct:
                 pass

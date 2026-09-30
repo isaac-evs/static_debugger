@@ -41,16 +41,21 @@ browser version. No install step, nothing else to configure. Clicking
 "Configure…" next to AI-generated test cases opens a small dialog to pick
 a provider (Claude, ChatGPT, or Gemini) and paste an API key for that run --
 otherwise they can leave it at 0 and use the debugger with the built-in
-example benchmarks as-is.
+example benchmarks as-is. A spinning indicator shows while a run is in
+progress; click **Abort** to stop one early instead of waiting it out.
 
 ## Known limitations
 
 - **Runs the actual repair on a background thread** (needed so the app
   window stays responsive while streaming live progress). AbinModel's
-  per-test timeout is signal-based and only reliably interrupts the main
-  thread, so a genuinely infinite-looping candidate could hang a run with
-  no recovery but closing and reopening the app. Not a concern for the
-  bundled example benchmarks; worth knowing if you point it at other code.
+  per-test timeout still correctly interrupts an ordinary hung candidate
+  here -- it's implemented as a cooperative flag checked by the tracer on
+  whichever thread is actually running the candidate (the timer itself is
+  a plain `threading.Timer`, so this works the same on macOS and Windows
+  -- it used to be a Unix-only `SIGALRM`). The real gap is
+  code that blocks in a C-level call with no Python trace events (e.g. a
+  long `time.sleep()`), which nothing here can interrupt -- use the
+  **Abort** button to bail out of the run in that case.
 - **~200MB app size**, mostly the bundled `patterns.db` (31k+ mined
   bug-fix patterns the search draws from) plus pandas/matplotlib/anthropic.
   Nothing to trim without losing real functionality.

@@ -21,15 +21,21 @@ resources (templates/, benchmarks/) are read from the extracted bundle
 writable state (patterns.db) instead lives under ~/.abindebugger. Running
 from source, both are just the project root, unchanged from before.
 
-Caveat: the repair run executes in a background thread so it can stream
-live while the request/response cycle stays free for the browser's SSE
-connection. AbinModel's per-test timeout is signal-based
-(signal.setitimer), which in CPython only interrupts the *main* thread
--- armed from a background thread it still fires, but on the main
-thread, not the one actually running the (possibly hung) candidate. A
-genuinely infinite-looping candidate can therefore hang a run
-indefinitely in this UI. cli.py runs on the main thread and does not
-have this limitation.
+The repair run executes on a background thread so it can stream live
+while the request/response cycle stays free for the browser's SSE
+connection. AbinModel's per-test timeout is a threading.Timer
+(utils.start_test_timer -- cross-platform, unlike the SIGALRM it used
+to be) that just flips a shared flag (config.TIMEOUT_SIGNAL_RECEIVED),
+which AbinCollector.collect() polls on every traced line/call and
+raises TimeoutError from *whichever thread is actually executing the
+candidate* (see model/debugger/AbinCollector.py). That polling happens
+on the worker thread, so ordinary hung Python code (loops, recursion)
+is still correctly interrupted here, same as in cli.py. The one real
+gap: code that blocks in a C-level call with no Python bytecode/trace
+events (e.g. a long time.sleep(), a blocking network call) won't be
+interrupted by this mechanism on any thread -- for that case, use the
+Abort button (POST /abort/<run_id>, checked cooperatively between
+hypotheses in AbinModel._search) to bail out of the run itself.
 """
 import ast
 import csv
@@ -97,6 +103,8 @@ _DONE = object()  # sentinel marking end-of-stream on a run's queue
 
 RUN_RESULTS = {}  # run_id -> CSV text for /download, populated once a run finishes
 _MAX_STORED_RESULTS = 30  # bounds memory for a long-lived local session
+
+RUN_CANCEL_EVENTS = {}  # run_id -> threading.Event, set by /abort, checked by AbinModel._search
 
 
 def _outcome_label(observation, index: int) -> str:
@@ -177,7 +185,7 @@ class _QueueLogHandler(logging.Handler):
             self.q.put(message)
 
 
-def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
+def _execute_run(run_id: str, q: queue.Queue, form: dict, cancel_event: threading.Event) -> None:
     """ Runs one debugging session (mirrors cli.py's main()), pushing
     each progress line into `q` as it happens instead of printing.
     Runs on a background thread -- see the module docstring's caveat
@@ -220,8 +228,9 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
         except Exception as e:
             q.put(f"[error] Failed to initialize AbinModel: {e}")
             return
+        abin.cancel_event = cancel_event
 
-        if num_ai_tests > 0:
+        if num_ai_tests > 0 and not cancel_event.is_set():
             param_types = dict(zip(parsed_types["input_args"], parsed_types["type"]))
             q.put(f"Generating {num_ai_tests} AI-authored test case(s) via {ai_provider}/{ai_model}...")
             try:
@@ -239,11 +248,24 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
             else:
                 abin.inject_tests(ai_tests)
                 q.put(f"Injected {len(ai_tests)} AI-generated test case(s). Test suite size: {len(abin.test_suite)}")
+            # AI generation is a blocking network call, not interruptible via
+            # cancel_event -- if the user aborted while it was in flight, skip
+            # straight to reporting the abort instead of starting the search.
+
+        if cancel_event.is_set():
+            q.put("Aborted by user.")
+            q.put("RESULT::" + json.dumps({"status": "aborted", "message": "Aborted by user.", "code": None}))
+            return
 
         try:
             repaired_code, behavior, prev_observation, new_observation = abin.start_auto_debugging()
         except Exception as e:
             q.put(f"[error] Debugging run failed: {e}")
+            return
+
+        if cancel_event.is_set():
+            q.put("Aborted by user.")
+            q.put("RESULT::" + json.dumps({"status": "aborted", "message": "Aborted by user.", "code": None}))
             return
 
         if repaired_code:
@@ -278,6 +300,7 @@ def _execute_run(run_id: str, q: queue.Queue, form: dict) -> None:
     finally:
         logger_obj.removeHandler(handler)
         logger_obj.setLevel(prev_level)
+        RUN_CANCEL_EVENTS.pop(run_id, None)
         q.put(_DONE)
 
 
@@ -309,8 +332,25 @@ def run():
     run_id = uuid.uuid4().hex
     q = queue.Queue()
     RUNS[run_id] = q
-    threading.Thread(target=_execute_run, args=(run_id, q, request.form.to_dict()), daemon=True).start()
+    cancel_event = threading.Event()
+    RUN_CANCEL_EVENTS[run_id] = cancel_event
+    threading.Thread(target=_execute_run, args=(run_id, q, request.form.to_dict(), cancel_event), daemon=True).start()
     return jsonify({"run_id": run_id})
+
+
+@app.route("/abort/<run_id>", methods=["POST"])
+def abort(run_id):
+    """ Best-effort cancellation: sets a flag AbinModel._search checks
+    between hypotheses (and recursive dives), so it stops within roughly
+    one hypothesis's worth of test evaluation rather than instantly --
+    there's no safe way to hard-kill a running Python thread mid-write.
+    :rtype: Response
+    """
+    cancel_event = RUN_CANCEL_EVENTS.get(run_id)
+    if cancel_event is None:
+        return jsonify({"error": "unknown or already-finished run_id"}), 404
+    cancel_event.set()
+    return jsonify({"ok": True})
 
 
 @app.route("/stream/<run_id>", methods=["GET"])

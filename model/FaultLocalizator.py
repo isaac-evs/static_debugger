@@ -13,9 +13,6 @@ import astunparse
 import re
 import logger as AbinLogging
 import config as DebugController
-import signal
-import utils
-signal.signal(signal.SIGALRM, utils.test_timeout_handler)
 
 class FaultLocalizator(ModelTester, HypothesisRefinement):
     """ This class is used to automatically locate a defective LOC """

@@ -127,7 +127,7 @@ class AbinDebugger(OchiaiDebugger):
                  exc_traceback: TracebackType) -> Optional[bool]:
         """Exit the `with` block.
         
-        In case that a timeout is triggered by signal.SIGALRM,
+        In case that a timeout is triggered by the per-test timer (utils.start_test_timer),
         the event will be detected by the change of value in the
         control variable TIMEOUT_SIGNAL_RECEIVED. If the value
         is equal to 2 the process will label the current test as FAIL,
